@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+*.err
+
+# Local env files
+.env
+.env.*
+
+# Installed runtime files
+.local/
+Library/
+com.local.model-proxy.plist
+
+# API keys or secrets
+*.key
+*.secret
