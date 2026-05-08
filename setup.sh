@@ -33,7 +33,42 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROXY_DIR="$HOME/.local/model-proxy"
 PROXY_PORT="${PROXY_PORT:-3099}"
-DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-https://api.deepseek.com/anthropic}"
+
+PROVIDER="${PROVIDER:-deepseek}"
+
+case "$PROVIDER" in
+  deepseek)
+    DEFAULT_UPSTREAM_BASE_URL="https://api.deepseek.com/anthropic"
+    DEFAULT_MODEL_RULES_JSON='[
+      {"match":"haiku","target":"deepseek-v4-flash"},
+      {"match":"opus","target":"deepseek-v4-pro"},
+      {"match":"sonnet","target":"deepseek-v4-pro"}
+    ]'
+    DEFAULT_FALLBACK_MODEL="deepseek-v4-flash"
+    ;;
+
+  mimo)
+    DEFAULT_UPSTREAM_BASE_URL="https://token-plan-cn.xiaomimimo.com/anthropic"
+    DEFAULT_MODEL_RULES_JSON='[
+      {"match":"haiku","target":"mimo-v2.5-pro"},
+      {"match":"opus","target":"mimo-v2.5-pro"},
+      {"match":"sonnet","target":"mimo-v2.5-pro"}
+    ]'
+    DEFAULT_FALLBACK_MODEL="mimo-v2.5-pro"
+    ;;
+
+  *)
+    echo "未知 PROVIDER: $PROVIDER"
+    echo "支持的 PROVIDER: deepseek, mimo"
+    exit 1
+    ;;
+esac
+
+UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-$DEFAULT_UPSTREAM_BASE_URL}"
+MODEL_RULES_JSON="${MODEL_RULES_JSON:-$DEFAULT_MODEL_RULES_JSON}"
+FALLBACK_MODEL="${FALLBACK_MODEL:-$DEFAULT_FALLBACK_MODEL}"
+
+UPSTREAM_API_KEY="${UPSTREAM_API_KEY:-${DEEPSEEK_API_KEY:-}}"
 
 PLIST_LABEL="com.local.model-proxy"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
@@ -49,12 +84,12 @@ ok "必要文件存在"
 
 header "步骤 1 / 6  读取 DeepSeek API Key"
 
-if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
-  read -rsp "请粘贴 DeepSeek API Key，输入不会显示: " DEEPSEEK_API_KEY
+if [[ -z "${UPSTREAM_API_KEY:-}" ]]; then
+  read -rsp "请粘贴 ${PROVIDER} API Key（输入不显示）: " UPSTREAM_API_KEY
   echo
 fi
 
-[[ -n "$DEEPSEEK_API_KEY" ]] || die "DEEPSEEK_API_KEY 不能为空"
+[[ -z "$UPSTREAM_API_KEY" ]] && die "API Key 不能为空"
 
 ok "API Key 已读取"
 
@@ -109,11 +144,20 @@ cat > "$PLIST_PATH" <<PLIST_EOF
 
   <key>EnvironmentVariables</key>
   <dict>
-    <key>DEEPSEEK_API_KEY</key>
-    <string>${DEEPSEEK_API_KEY}</string>
+    <key>PROVIDER</key>
+    <string>${PROVIDER}</string>
 
-    <key>DEEPSEEK_BASE_URL</key>
-    <string>${DEEPSEEK_BASE_URL}</string>
+    <key>UPSTREAM_API_KEY</key>
+    <string>${UPSTREAM_API_KEY}</string>
+
+    <key>UPSTREAM_BASE_URL</key>
+    <string>${UPSTREAM_BASE_URL}</string>
+
+    <key>MODEL_RULES_JSON</key>
+    <string>${MODEL_RULES_JSON}</string>
+
+    <key>FALLBACK_MODEL</key>
+    <string>${FALLBACK_MODEL}</string>
 
     <key>PROXY_PORT</key>
     <string>${PROXY_PORT}</string>
@@ -206,6 +250,8 @@ ok "Claude Desktop 配置已更新: $CLAUDE_CONFIG"
 
 echo
 echo -e "${GREEN}${BOLD}安装完成！${NC}"
+echo "  当前 Provider: ${PROVIDER}"
+echo "  上游地址: ${UPSTREAM_BASE_URL}"
 echo
 echo "下一步："
 echo "  1. 完全退出 Claude Desktop，不是只关窗口"

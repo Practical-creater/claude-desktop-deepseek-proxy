@@ -17,3 +17,7 @@ com.local.model-proxy.plist
 # API keys or secrets
 *.key
 *.secret
+
+# Local backups
+*.bak.*
+*.backup

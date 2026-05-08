@@ -1,310 +1,293 @@
-# Claude Desktop DeepSeek Proxy
+# Claude Desktop Local Model Gateway
 
 <p align="center">
   <strong>English</strong> |
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-A local macOS proxy that lets Claude Desktop Gateway use DeepSeek models.
+A local macOS gateway that lets Claude Desktop use DeepSeek, MiMo, and other Anthropic-compatible model providers.
 
-It forwards Claude Desktop requests to DeepSeek's Anthropic-compatible API, maps Claude-style model names to DeepSeek model names, and removes dynamic `cch=` values from system prompts to improve cache reuse.
+Claude Desktop Gateway expects Claude-style model names such as `claude-haiku-4-5` and `claude-opus-4-7`. Many third-party model providers use their own model names. This project runs a small local proxy that translates those model names and forwards requests to your selected provider.
 
-## How It Works
+## What It Does
 
-```txt
-Claude Desktop                  Local Proxy :3099                DeepSeek API
-────────────────                ─────────────────                ────────────
-POST /v1/messages   ────────►   replace model name   ────────►   /anthropic/v1/messages
-model: claude-opus              clean dynamic cch                 model: deepseek-v4-pro
-                    ◄────────   passthrough response  ◄────────   Anthropic-compatible response
-```
+Claude Desktop only needs to talk to one local address:
 
-This proxy does **not** convert Anthropic format to OpenAI format.
+`http://127.0.0.1:3099`
 
-DeepSeek provides an Anthropic-compatible endpoint, so the proxy only:
+The local gateway then forwards requests to the provider you choose:
 
-- replaces the `model` field
-- removes dynamic `cch=...` values
-- forwards the request and response as-is
-- logs model routing and cache usage
+- DeepSeek
+- MiMo
+- other Anthropic-compatible APIs
 
-## Quick Start
+Basic flow:
 
-### 1. Install
+`Claude Desktop -> Local Gateway -> Provider API`
 
-```bash
-cd ~/Downloads/model-proxy
-chmod +x setup.sh uninstall.sh
-DEEPSEEK_API_KEY=sk-your-key bash setup.sh
-```
+The gateway also removes dynamic `cch=...` values injected into the system prompt. These values can make prompt prefixes unstable and reduce cache hits. Removing them helps upstream context caching work better.
 
-Or run without an environment variable:
+## Features
 
-```bash
-bash setup.sh
-```
+- Works with Claude Desktop Gateway
+- Supports DeepSeek by default
+- Supports MiMo as a built-in provider
+- Supports custom Anthropic-compatible providers
+- Maps Claude model names to provider model names
+- Runs locally on macOS
+- Auto-starts with `launchd`
+- Logs model routing and cache statistics
+- Keeps Claude Desktop config simple
 
-The script will ask for your DeepSeek API key.
+## Requirements
 
-### 2. Restart Claude Desktop
+- macOS
+- Claude Desktop
+- Node.js
+- API key from your provider
 
-Fully quit Claude Desktop:
+Check Node.js:
 
-```txt
-Claude menu → Quit Claude
-```
+    node --version
 
-Then reopen it.
-
-### 3. Verify
-
-```bash
-curl http://127.0.0.1:3099/health
-```
-
-Expected output:
-
-```json
-{
-  "status": "ok",
-  "port": 3099,
-  "upstream": "https://api.deepseek.com/anthropic"
-}
-```
-
-Watch logs:
-
-```bash
-tail -f ~/.local/model-proxy/proxy.log
-```
-
-Send a message in Claude Desktop. You should see model routing logs.
+If Node.js is missing, the installer will try to install it with Homebrew.
 
 ## Files
 
-```txt
-model-proxy/
-├── proxy.js
-├── setup.sh
-├── uninstall.sh
-└── README.md
-```
+    model-proxy/
+    ├── proxy.js
+    ├── setup.sh
+    ├── uninstall.sh
+    ├── README.md
+    └── README.zh-CN.md
 
 | File | Description |
 |---|---|
-| `proxy.js` | Local proxy server |
-| `setup.sh` | macOS installer |
+| `proxy.js` | Local gateway server |
+| `setup.sh` | Installer |
 | `uninstall.sh` | Uninstaller |
-| `README.md` | Documentation |
+| `README.md` | English documentation |
+| `README.zh-CN.md` | Chinese documentation |
 
-## Claude Desktop Configuration
+## Quick Start
 
-The installer updates:
+### Use DeepSeek
 
-```txt
-~/Library/Application Support/Claude/claude_desktop_config.json
-```
+    cd ~/Downloads/model-proxy
+    chmod +x setup.sh uninstall.sh
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
 
-It writes:
+### Use MiMo
 
-```json
-{
-  "gateway": {
-    "url": "http://127.0.0.1:3099",
-    "inferenceModels": [
-      "claude-haiku-4-5",
-      "claude-opus-4-7",
-      "claude-sonnet-4-5"
-    ]
-  }
-}
-```
+    cd ~/Downloads/model-proxy
+    chmod +x setup.sh uninstall.sh
+    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
 
-The Gateway base URL must be:
+After installation, fully quit and reopen Claude Desktop.
 
-```txt
-http://127.0.0.1:3099
-```
+Use:
 
-Do **not** set it to:
+`Claude menu -> Quit Claude`
 
-```txt
-https://api.deepseek.com/anthropic
-```
+Do not just close the window.
 
-If Claude Desktop connects directly to DeepSeek, the proxy is bypassed and model mapping will not work.
+## Claude Desktop Setup
+
+Claude Desktop should always use the local gateway URL:
+
+    http://127.0.0.1:3099
+
+Do not put provider URLs directly into Claude Desktop, such as:
+
+    https://api.deepseek.com/anthropic
+    https://token-plan-cn.xiaomimimo.com/anthropic
+
+Those URLs are used internally by the local gateway.
+
+The installer updates this file automatically:
+
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+
+The gateway config should look like this:
+
+    {
+      "gateway": {
+        "url": "http://127.0.0.1:3099",
+        "inferenceModels": [
+          "claude-haiku-4-5",
+          "claude-opus-4-7",
+          "claude-sonnet-4-5"
+        ]
+      }
+    }
+
+## Providers
+
+The gateway includes provider presets.
+
+| Provider | Upstream URL | Default mapping |
+|---|---|---|
+| `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`, Opus/Sonnet -> `deepseek-v4-pro` |
+| `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
+
+To switch providers, run `setup.sh` again with another provider.
+
+DeepSeek:
+
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
+
+MiMo:
+
+    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
+
+Claude Desktop still uses the same local URL:
+
+    http://127.0.0.1:3099
 
 ## Model Mapping
 
-| Claude Desktop model contains | DeepSeek model |
+### DeepSeek
+
+| Claude Desktop model contains | Provider model |
 |---|---|
 | `haiku` | `deepseek-v4-flash` |
 | `opus` | `deepseek-v4-pro` |
 | `sonnet` | `deepseek-v4-pro` |
 | other | `deepseek-v4-flash` |
 
-Examples:
+### MiMo
 
-```txt
-claude-haiku-4-5       → deepseek-v4-flash
-claude-haiku-4-5-xxx   → deepseek-v4-flash
-claude-opus-4-7        → deepseek-v4-pro
-claude-sonnet-4-5      → deepseek-v4-pro
-```
+| Claude Desktop model contains | Provider model |
+|---|---|
+| `haiku` | `mimo-v2.5-pro` |
+| `opus` | `mimo-v2.5-pro` |
+| `sonnet` | `mimo-v2.5-pro` |
+| other | `mimo-v2.5-pro` |
+
+### MiMo 1M Context
+
+If your MiMo account supports 1M context models, you can use the `[1m]` suffix:
+
+    PROVIDER=mimo \
+    UPSTREAM_API_KEY=tp-your-key \
+    MODEL_RULES_JSON='[
+      {"match":"haiku","target":"mimo-v2.5-pro[1m]"},
+      {"match":"opus","target":"mimo-v2.5-pro[1m]"},
+      {"match":"sonnet","target":"mimo-v2.5-pro[1m]"}
+    ]' \
+    FALLBACK_MODEL='mimo-v2.5-pro[1m]' \
+    bash setup.sh
+
+## Custom Provider
+
+You can use any Anthropic-compatible provider by setting these variables:
+
+    PROVIDER=custom \
+    UPSTREAM_BASE_URL=https://your-provider.example.com/anthropic \
+    UPSTREAM_API_KEY=your-api-key \
+    MODEL_RULES_JSON='[
+      {"match":"haiku","target":"your-fast-model"},
+      {"match":"opus","target":"your-strong-model"},
+      {"match":"sonnet","target":"your-strong-model"}
+    ]' \
+    FALLBACK_MODEL=your-fast-model \
+    bash setup.sh
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | required | DeepSeek API key |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek Anthropic-compatible endpoint |
-| `PROXY_PORT` | `3099` | Local proxy port |
+| `PROVIDER` | `deepseek` | Provider preset. Supports `deepseek`, `mimo`, or `custom` |
+| `UPSTREAM_API_KEY` | required | API key for the selected provider |
+| `UPSTREAM_BASE_URL` | provider preset | Custom Anthropic-compatible API URL |
+| `MODEL_RULES_JSON` | provider preset | Custom model mapping rules |
+| `FALLBACK_MODEL` | provider preset | Model used when no rule matches |
+| `PROXY_PORT` | `3099` | Local gateway port |
 
-Example:
+Backward compatibility:
 
-```bash
-PROXY_PORT=3100 DEEPSEEK_API_KEY=sk-your-key bash setup.sh
-```
+| Variable | Status |
+|---|---|
+| `DEEPSEEK_API_KEY` | Still accepted as a fallback for `UPSTREAM_API_KEY` |
+| `DEEPSEEK_BASE_URL` | Still accepted as a fallback for `UPSTREAM_BASE_URL` |
 
-If you change the port, Claude Desktop Gateway URL must use the same port:
-
-```txt
-http://127.0.0.1:3100
-```
-
-## Cache Optimization
-
-Claude Desktop may inject dynamic values into the system prompt:
-
-```txt
-x-anthropic-billing-header: ...; cch=a430b;
-```
-
-The `cch` value changes between sessions and can reduce DeepSeek cache hits.
-
-The proxy removes it before forwarding:
-
-```txt
-x-anthropic-billing-header: ...;
-```
-
-Logs show both the original and forwarded system prefix:
-
-```txt
-原始system前缀 : ... cch=a430b;
-转发system前缀 : ...
-```
-
-The forwarded system prefix should not contain `cch=`.
-
-Cache statistics are logged as:
-
-```txt
-缓存统计 : hit=34688 miss=0 input=1641 output=651 命中率=100.0%
-```
-
-If `hit > 0`, DeepSeek cache was used.
-
-## Common Commands
+## Verify
 
 Health check:
 
-```bash
-curl http://127.0.0.1:3099/health
-```
+    curl http://127.0.0.1:3099/health
 
 View logs:
 
-```bash
-tail -f ~/.local/model-proxy/proxy.log
-```
+    tail -f ~/.local/model-proxy/proxy.log
+
+For DeepSeek, you should see logs like:
+
+    收到模型名     : "claude-opus-4-7"
+    转发模型名     : "deepseek-v4-pro"
+
+For MiMo, you should see:
+
+    收到模型名     : "claude-opus-4-7"
+    转发模型名     : "mimo-v2.5-pro"
+
+## Common Commands
+
+View logs:
+
+    tail -f ~/.local/model-proxy/proxy.log
 
 View errors:
 
-```bash
-tail -f ~/.local/model-proxy/proxy.err
-```
+    tail -f ~/.local/model-proxy/proxy.err
 
 Restart service:
 
-```bash
-PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-```
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST"
 
-Check syntax:
+Check script syntax:
 
-```bash
-node --check ~/.local/model-proxy/proxy.js
-```
-
-## macOS launchd Service
-
-The installer creates:
-
-```txt
-~/Library/LaunchAgents/com.local.model-proxy.plist
-```
-
-The service:
-
-- starts automatically after login
-- restarts if the proxy crashes
-- writes logs to `~/.local/model-proxy/proxy.log`
-- writes errors to `~/.local/model-proxy/proxy.err`
-
-## Update
-
-If you edit the project copy of `proxy.js`, reinstall it with:
-
-```bash
-cp ~/Downloads/model-proxy/proxy.js ~/.local/model-proxy/proxy.js
-PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-```
+    node --check ~/.local/model-proxy/proxy.js
 
 ## Uninstall
 
-```bash
-cd ~/Downloads/model-proxy
-bash uninstall.sh
-```
+    cd ~/Downloads/model-proxy
+    bash uninstall.sh
 
 The uninstaller will:
 
-- stop the launchd service
+- stop the local gateway service
 - remove the launch agent
-- delete the installed proxy directory
-- remove `gateway` from Claude Desktop config
+- delete the installed proxy files
+- remove the `gateway` field from Claude Desktop config
 - back up the old Claude Desktop config
 
 Restart Claude Desktop after uninstalling.
 
 ## Troubleshooting
 
-| Problem | Cause | Fix |
+| Problem | Possible cause | Fix |
 |---|---|---|
-| No proxy logs | Claude Desktop is not using the proxy | Set Gateway URL to `http://127.0.0.1:3099` |
-| Opus still uses flash | Model mapping is not active | Check `proxy.log` and confirm Opus maps to `deepseek-v4-pro` |
-| `401 Unauthorized` | Missing or invalid API key | Reinstall with `DEEPSEEK_API_KEY=sk-your-key bash setup.sh` |
-| Port already in use | `3099` is occupied | Use `PROXY_PORT=3100` |
-| Edited `proxy.js` but no change | Edited the wrong file | Update `~/.local/model-proxy/proxy.js` and restart service |
+| No logs appear | Claude Desktop is not using the local gateway | Set Gateway URL to `http://127.0.0.1:3099` |
+| Opus still uses flash | Model mapping is not active | Check `proxy.log` |
+| `401 Unauthorized` | API key is missing or invalid | Reinstall with the correct `UPSTREAM_API_KEY` |
+| MiMo says `Not supported model` | Wrong MiMo model ID | Use `mimo-v2.5-pro` or the exact model ID from MiMo docs |
+| Health check shows the wrong provider | Old provider is still installed | Rerun `setup.sh` with the provider you want |
+| Port already in use | Port `3099` is occupied | Use `PROXY_PORT=3100` |
 
 ## Security
 
-Do not commit or share:
+Do not commit or share your API key.
 
-```txt
-~/Library/LaunchAgents/com.local.model-proxy.plist
-~/.local/model-proxy/proxy.log
-~/.local/model-proxy/proxy.err
-```
+Do not share these local files:
 
-These files may contain local paths, request metadata, or your API key.
+    ~/Library/LaunchAgents/com.local.model-proxy.plist
+    ~/.local/model-proxy/proxy.log
+    ~/.local/model-proxy/proxy.err
 
-Never commit your DeepSeek API key.
+They may contain local paths, request metadata, or API keys.
 
 ## License
 

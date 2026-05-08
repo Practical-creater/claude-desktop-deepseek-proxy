@@ -26,24 +26,68 @@ const https = require('https');
 
 const PORT = parseInt(process.env.PROXY_PORT || '3099', 10);
 
-// 注意：这里必须是 DeepSeek 的 Anthropic 兼容端点。
-// Claude Desktop 的 Gateway base URL 则应该填本地代理：http://127.0.0.1:3099
-const DEEPSEEK_BASE = (
-  process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/anthropic'
+const PROVIDER = process.env.PROVIDER || process.env.UPSTREAM_NAME || 'deepseek';
+
+const PROVIDER_PRESETS = {
+  deepseek: {
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    fallbackModel: 'deepseek-v4-flash',
+    modelRules: [
+      { match: 'haiku',  target: 'deepseek-v4-flash' },
+      { match: 'opus',   target: 'deepseek-v4-pro' },
+      { match: 'sonnet', target: 'deepseek-v4-pro' },
+    ],
+  },
+
+  mimo: {
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+    fallbackModel: 'mimo-v2.5-flash',
+    modelRules: [
+      { match: 'haiku',  target: 'mimo-v2.5-flash' },
+      { match: 'opus',   target: 'mimo-v2.5-pro' },
+      { match: 'sonnet', target: 'mimo-v2.5-pro' },
+    ],
+  },
+};
+
+const PRESET = PROVIDER_PRESETS[PROVIDER] || PROVIDER_PRESETS.deepseek;
+
+const UPSTREAM_BASE_URL = (
+  process.env.UPSTREAM_BASE_URL ||
+  process.env.UPSTREAM_BASE_URL_URL ||
+  PRESET.baseUrl
 ).replace(/\/$/, '');
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const UPSTREAM_API_KEY =
+  process.env.UPSTREAM_API_KEY ||
+  process.env.UPSTREAM_API_KEY ||
+  '';
 
-// 模糊匹配：只要 Claude Desktop 发来的模型名里包含关键词，就映射到对应 DeepSeek 模型。
-const MODEL_RULES = [
-  { match: /haiku/i,  target: 'deepseek-v4-flash' },
-  { match: /opus/i,   target: 'deepseek-v4-pro'   },
-  { match: /sonnet/i, target: 'deepseek-v4-pro'   },
-];
+function loadModelRules() {
+  if (process.env.MODEL_RULES_JSON) {
+    try {
+      const rules = JSON.parse(process.env.MODEL_RULES_JSON);
+      return rules.map(rule => ({
+        match: new RegExp(rule.match, 'i'),
+        target: rule.target,
+      }));
+    } catch (e) {
+      console.error('[proxy] MODEL_RULES_JSON 解析失败:', e.message);
+      console.error('[proxy] 将回退到 provider 默认模型映射');
+    }
+  }
 
-// 兜底模型：如果 Claude Desktop 将来发来未知模型名，默认走 flash，避免直接失败。
-// 注意：如果你希望未知模型一律走 pro，可以把这里改成 'deepseek-v4-pro'。
-const FALLBACK_MODEL = 'deepseek-v4-flash';
+  return PRESET.modelRules.map(rule => ({
+    match: new RegExp(rule.match, 'i'),
+    target: rule.target,
+  }));
+}
+
+const MODEL_RULES = loadModelRules();
+
+const FALLBACK_MODEL =
+  process.env.FALLBACK_MODEL ||
+  PRESET.fallbackModel;
 
 function resolveModel(name = '') {
   for (const rule of MODEL_RULES) {
@@ -166,7 +210,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       port: PORT,
-      upstream: DEEPSEEK_BASE,
+      upstream: UPSTREAM_BASE_URL,
       modelRules: MODEL_RULES.map(r => ({
         match: String(r.match),
         target: r.target,
@@ -221,10 +265,10 @@ const server = http.createServer(async (req, res) => {
 
   // 构造 DeepSeek 上游 URL。
   // 例如：
-  //   DEEPSEEK_BASE = https://api.deepseek.com/anthropic
+  //   UPSTREAM_BASE_URL = https://api.deepseek.com/anthropic
   //   req.url       = /v1/messages?beta=true
   //   upstream      = https://api.deepseek.com/anthropic/v1/messages?beta=true
-  const upstreamUrl = new URL(`${DEEPSEEK_BASE}${req.url}`);
+  const upstreamUrl = new URL(`${UPSTREAM_BASE_URL}${req.url}`);
   const isHttps = upstreamUrl.protocol === 'https:';
   const transport = isHttps ? https : http;
 
@@ -235,7 +279,7 @@ const server = http.createServer(async (req, res) => {
     host: upstreamUrl.host,
 
     // DeepSeek Anthropic API 支持 Bearer 形式。
-    authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+    authorization: `Bearer ${UPSTREAM_API_KEY}`,
 
     // 因为我们改了 body，所以必须重新计算 Content-Length。
     'content-length': String(sendBody.length),
@@ -379,11 +423,11 @@ server.on('error', e => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log('\n🔀  Claude Desktop ↔ DeepSeek 转译代理 v3.1');
   console.log(`    Claude Desktop → http://127.0.0.1:${PORT}`);
-  console.log(`    上游目标       → ${DEEPSEEK_BASE}`);
+  console.log(`    上游目标       → ${UPSTREAM_BASE_URL}`);
   console.log('');
 
-  if (!DEEPSEEK_API_KEY) {
-    console.log('⚠️   警告：DEEPSEEK_API_KEY 为空，请检查 launchd plist 里的 EnvironmentVariables。');
+  if (!UPSTREAM_API_KEY) {
+    console.log('⚠️   警告：UPSTREAM_API_KEY 为空，请检查 launchd plist 里的 EnvironmentVariables。');
     console.log('');
   }
 

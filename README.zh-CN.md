@@ -1,282 +1,266 @@
-# Claude Desktop DeepSeek Proxy
+# Claude Desktop 本地模型网关
 
 <p align="center">
   <a href="./README.md">English</a> |
   <strong>简体中文</strong>
 </p>
 
-一个运行在 macOS 本地的 Claude Desktop Gateway 代理，用于让 Claude Desktop 调用 DeepSeek 模型。
+这是一个运行在 macOS 本地的小工具，用来让 Claude Desktop Gateway 调用 DeepSeek、MiMo 以及其他 Anthropic-compatible 模型服务。
 
-它会把 Claude 风格的模型名转换成 DeepSeek 模型名，通过 DeepSeek 的 Anthropic 兼容端点转发请求，并清理 system prompt 里的动态 `cch=` 字段，以提高缓存复用率。
+Claude Desktop Gateway 通常要求使用 Claude 风格的模型名，比如 `claude-haiku-4-5`、`claude-opus-4-7`。但很多第三方模型服务使用自己的模型名。这个项目会在本地运行一个代理，自动把 Claude 模型名转换成对应服务商的模型名。
 
-## 原理
+## 它能做什么
 
-```txt
-Claude Desktop                  本地代理 :3099                   DeepSeek API
-────────────────                ─────────────────                ────────────
-POST /v1/messages   ────────►   替换 model 名       ────────►   /anthropic/v1/messages
-model: claude-opus              清理动态 cch                     model: deepseek-v4-pro
-                    ◄────────   原样透传响应        ◄────────   Anthropic 兼容响应
-```
+Claude Desktop 只需要连接一个本地地址：
 
-本项目**不做 Anthropic → OpenAI 格式转换**。
+`http://127.0.0.1:3099`
 
-DeepSeek 已经提供 Anthropic 兼容端点，所以代理只做：
+然后本地网关会把请求转发到你选择的服务商：
 
-- 替换 `model` 字段
-- 删除动态 `cch=...` 字段
-- 原样转发请求和响应
+- DeepSeek
+- MiMo
+- 其他 Anthropic-compatible API
+
+基本流程：
+
+`Claude Desktop -> 本地网关 -> 模型服务商 API`
+
+此外，网关还会清理 system prompt 里的动态 `cch=...` 字段。这个字段可能会导致上游缓存命中率降低，清理后有助于提高缓存复用率。
+
+## 功能特点
+
+- 支持 Claude Desktop Gateway
+- 默认支持 DeepSeek
+- 内置支持 MiMo
+- 支持自定义 Anthropic-compatible 服务商
+- 自动把 Claude 模型名映射到上游模型名
+- 本地运行，不暴露公网端口
+- 使用 macOS `launchd` 自动启动
 - 打印模型路由和缓存统计日志
+- Claude Desktop 配置简单
 
-## 快速开始
+## 使用要求
 
-### 1. 安装
+- macOS
+- Claude Desktop
+- Node.js
+- 对应服务商的 API Key
 
-```bash
-cd ~/Downloads/model-proxy
-chmod +x setup.sh uninstall.sh
-DEEPSEEK_API_KEY=sk-your-key bash setup.sh
-```
+检查 Node.js：
 
-也可以直接运行：
+    node --version
 
-```bash
-bash setup.sh
-```
-
-脚本会提示你输入 DeepSeek API Key。
-
-### 2. 重启 Claude Desktop
-
-完全退出 Claude Desktop：
-
-```txt
-菜单栏 Claude → Quit Claude
-```
-
-然后重新打开。
-
-### 3. 验证
-
-```bash
-curl http://127.0.0.1:3099/health
-```
-
-正常输出类似：
-
-```json
-{
-  "status": "ok",
-  "port": 3099,
-  "upstream": "https://api.deepseek.com/anthropic"
-}
-```
-
-查看实时日志：
-
-```bash
-tail -f ~/.local/model-proxy/proxy.log
-```
-
-在 Claude Desktop 里发送消息，应该能看到模型转发日志。
+如果没有安装 Node.js，安装脚本会尝试通过 Homebrew 安装。
 
 ## 文件说明
 
-```txt
-model-proxy/
-├── proxy.js
-├── setup.sh
-├── uninstall.sh
-└── README.md
-```
+    model-proxy/
+    ├── proxy.js
+    ├── setup.sh
+    ├── uninstall.sh
+    ├── README.md
+    └── README.zh-CN.md
 
-| 文件 | 作用 |
+| 文件 | 说明 |
 |---|---|
-| `proxy.js` | 本地代理核心 |
-| `setup.sh` | macOS 一键安装脚本 |
+| `proxy.js` | 本地网关核心代码 |
+| `setup.sh` | 安装脚本 |
 | `uninstall.sh` | 卸载脚本 |
-| `README.md` | 项目说明 |
+| `README.md` | 英文文档 |
+| `README.zh-CN.md` | 中文文档 |
 
-## Claude Desktop 配置
+## 快速开始
 
-安装脚本会更新：
+### 使用 DeepSeek
 
-```txt
-~/Library/Application Support/Claude/claude_desktop_config.json
-```
+    cd ~/Downloads/model-proxy
+    chmod +x setup.sh uninstall.sh
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
 
-写入：
+### 使用 MiMo
 
-```json
-{
-  "gateway": {
-    "url": "http://127.0.0.1:3099",
-    "inferenceModels": [
-      "claude-haiku-4-5",
-      "claude-opus-4-7",
-      "claude-sonnet-4-5"
-    ]
-  }
-}
-```
+    cd ~/Downloads/model-proxy
+    chmod +x setup.sh uninstall.sh
+    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
 
-Gateway base URL 必须是：
+安装完成后，需要完全退出并重新打开 Claude Desktop。
 
-```txt
-http://127.0.0.1:3099
-```
+请使用：
 
-不要填：
+`菜单栏 Claude -> Quit Claude`
 
-```txt
-https://api.deepseek.com/anthropic
-```
+不要只是关闭窗口。
 
-如果 Claude Desktop 直接连接 DeepSeek，就会绕过本地代理，模型映射不会生效。
+## Claude Desktop 应该怎么配置
+
+Claude Desktop 永远只需要连接本地网关：
+
+    http://127.0.0.1:3099
+
+不要把服务商地址直接填进 Claude Desktop，例如：
+
+    https://api.deepseek.com/anthropic
+    https://token-plan-cn.xiaomimimo.com/anthropic
+
+这些地址是本地网关内部使用的，不应该直接填到 Claude Desktop 里。
+
+安装脚本会自动更新这个配置文件：
+
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+
+配置内容大致如下：
+
+    {
+      "gateway": {
+        "url": "http://127.0.0.1:3099",
+        "inferenceModels": [
+          "claude-haiku-4-5",
+          "claude-opus-4-7",
+          "claude-sonnet-4-5"
+        ]
+      }
+    }
+
+## Providers
+
+本地网关内置 provider 预设。
+
+| Provider | 上游地址 | 默认模型映射 |
+|---|---|---|
+| `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`，Opus/Sonnet -> `deepseek-v4-pro` |
+| `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
+
+切换 provider 只需要重新运行安装脚本。
+
+DeepSeek：
+
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
+
+MiMo：
+
+    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
+
+Claude Desktop 仍然只需要使用同一个本地地址：
+
+    http://127.0.0.1:3099
 
 ## 模型映射
 
-| Claude Desktop 模型名包含 | DeepSeek 模型 |
+### DeepSeek
+
+| Claude Desktop 模型名包含 | 上游模型 |
 |---|---|
 | `haiku` | `deepseek-v4-flash` |
 | `opus` | `deepseek-v4-pro` |
 | `sonnet` | `deepseek-v4-pro` |
 | 其他 | `deepseek-v4-flash` |
 
-示例：
+### MiMo
 
-```txt
-claude-haiku-4-5       → deepseek-v4-flash
-claude-haiku-4-5-xxx   → deepseek-v4-flash
-claude-opus-4-7        → deepseek-v4-pro
-claude-sonnet-4-5      → deepseek-v4-pro
-```
+| Claude Desktop 模型名包含 | 上游模型 |
+|---|---|
+| `haiku` | `mimo-v2.5-pro` |
+| `opus` | `mimo-v2.5-pro` |
+| `sonnet` | `mimo-v2.5-pro` |
+| 其他 | `mimo-v2.5-pro` |
+
+### MiMo 1M 上下文
+
+如果你的 MiMo 账号支持 1M 上下文模型，可以在模型名后添加 `[1m]`：
+
+    PROVIDER=mimo \
+    UPSTREAM_API_KEY=tp-your-key \
+    MODEL_RULES_JSON='[
+      {"match":"haiku","target":"mimo-v2.5-pro[1m]"},
+      {"match":"opus","target":"mimo-v2.5-pro[1m]"},
+      {"match":"sonnet","target":"mimo-v2.5-pro[1m]"}
+    ]' \
+    FALLBACK_MODEL='mimo-v2.5-pro[1m]' \
+    bash setup.sh
+
+## 自定义服务商
+
+只要对方提供 Anthropic-compatible API，就可以通过环境变量接入：
+
+    PROVIDER=custom \
+    UPSTREAM_BASE_URL=https://your-provider.example.com/anthropic \
+    UPSTREAM_API_KEY=your-api-key \
+    MODEL_RULES_JSON='[
+      {"match":"haiku","target":"your-fast-model"},
+      {"match":"opus","target":"your-strong-model"},
+      {"match":"sonnet","target":"your-strong-model"}
+    ]' \
+    FALLBACK_MODEL=your-fast-model \
+    bash setup.sh
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 必填 | DeepSeek API Key |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/anthropic` | DeepSeek Anthropic 兼容端点 |
-| `PROXY_PORT` | `3099` | 本地代理端口 |
+| `PROVIDER` | `deepseek` | provider 预设，支持 `deepseek`、`mimo` 或 `custom` |
+| `UPSTREAM_API_KEY` | 必填 | 当前服务商的 API Key |
+| `UPSTREAM_BASE_URL` | provider 预设 | 自定义 Anthropic-compatible API 地址 |
+| `MODEL_RULES_JSON` | provider 预设 | 自定义模型映射规则 |
+| `FALLBACK_MODEL` | provider 预设 | 没有匹配到规则时使用的模型 |
+| `PROXY_PORT` | `3099` | 本地网关端口 |
 
-示例：
+兼容旧变量：
 
-```bash
-PROXY_PORT=3100 DEEPSEEK_API_KEY=sk-your-key bash setup.sh
-```
+| 变量 | 状态 |
+|---|---|
+| `DEEPSEEK_API_KEY` | 仍可作为 `UPSTREAM_API_KEY` 的 fallback |
+| `DEEPSEEK_BASE_URL` | 仍可作为 `UPSTREAM_BASE_URL` 的 fallback |
 
-如果修改端口，Claude Desktop 的 Gateway URL 也要使用相同端口：
-
-```txt
-http://127.0.0.1:3100
-```
-
-## 缓存优化
-
-Claude Desktop 可能会在 system prompt 中注入动态字段：
-
-```txt
-x-anthropic-billing-header: ...; cch=a430b;
-```
-
-其中 `cch` 会变化，可能降低 DeepSeek 缓存命中率。
-
-代理会在转发前删除它：
-
-```txt
-x-anthropic-billing-header: ...;
-```
-
-日志中会同时显示原始和转发后的 system 前缀：
-
-```txt
-原始system前缀 : ... cch=a430b;
-转发system前缀 : ...
-```
-
-`转发system前缀` 中不应该再出现 `cch=`。
-
-缓存统计示例：
-
-```txt
-缓存统计 : hit=34688 miss=0 input=1641 output=651 命中率=100.0%
-```
-
-只要 `hit > 0`，就说明 DeepSeek 缓存已经命中。
-
-## 常用命令
+## 验证是否成功
 
 健康检查：
 
-```bash
-curl http://127.0.0.1:3099/health
-```
+    curl http://127.0.0.1:3099/health
 
 查看日志：
 
-```bash
-tail -f ~/.local/model-proxy/proxy.log
-```
+    tail -f ~/.local/model-proxy/proxy.log
+
+DeepSeek 正常时，日志中应该能看到：
+
+    收到模型名     : "claude-opus-4-7"
+    转发模型名     : "deepseek-v4-pro"
+
+MiMo 正常时，日志中应该能看到：
+
+    收到模型名     : "claude-opus-4-7"
+    转发模型名     : "mimo-v2.5-pro"
+
+## 常用命令
+
+查看日志：
+
+    tail -f ~/.local/model-proxy/proxy.log
 
 查看错误：
 
-```bash
-tail -f ~/.local/model-proxy/proxy.err
-```
+    tail -f ~/.local/model-proxy/proxy.err
 
 重启服务：
 
-```bash
-PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-```
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST"
 
-检查语法：
+检查脚本语法：
 
-```bash
-node --check ~/.local/model-proxy/proxy.js
-```
-
-## macOS launchd 服务
-
-安装脚本会创建：
-
-```txt
-~/Library/LaunchAgents/com.local.model-proxy.plist
-```
-
-该服务会：
-
-- 登录后自动启动
-- 崩溃后自动重启
-- 将日志写入 `~/.local/model-proxy/proxy.log`
-- 将错误写入 `~/.local/model-proxy/proxy.err`
-
-## 更新
-
-如果你修改了项目目录里的 `proxy.js`，需要复制到实际运行目录并重启：
-
-```bash
-cp ~/Downloads/model-proxy/proxy.js ~/.local/model-proxy/proxy.js
-PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-```
+    node --check ~/.local/model-proxy/proxy.js
 
 ## 卸载
 
-```bash
-cd ~/Downloads/model-proxy
-bash uninstall.sh
-```
+    cd ~/Downloads/model-proxy
+    bash uninstall.sh
 
 卸载脚本会：
 
-- 停止 launchd 服务
+- 停止本地网关服务
 - 删除 launch agent
-- 删除代理安装目录
+- 删除已安装的代理文件
 - 从 Claude Desktop 配置中移除 `gateway`
 - 备份旧的 Claude Desktop 配置
 
@@ -284,27 +268,26 @@ bash uninstall.sh
 
 ## 故障排查
 
-| 现象 | 原因 | 解决方法 |
+| 问题 | 可能原因 | 解决方法 |
 |---|---|---|
-| 没有代理日志 | Claude Desktop 没有走代理 | 确认 Gateway URL 是 `http://127.0.0.1:3099` |
-| Opus 仍然走 flash | 模型映射未生效 | 查看 `proxy.log`，确认 Opus 转发到 `deepseek-v4-pro` |
-| `401 Unauthorized` | API Key 缺失或错误 | 使用 `DEEPSEEK_API_KEY=sk-your-key bash setup.sh` 重新安装 |
-| 端口被占用 | `3099` 已被使用 | 使用 `PROXY_PORT=3100` |
-| 修改 `proxy.js` 后没变化 | 修改了错误文件 | 更新 `~/.local/model-proxy/proxy.js` 并重启服务 |
+| 没有任何代理日志 | Claude Desktop 没有走本地网关 | 确认 Gateway URL 是 `http://127.0.0.1:3099` |
+| Opus 还是走 flash | 模型映射没有生效 | 查看 `proxy.log` |
+| `401 Unauthorized` | API Key 缺失或错误 | 使用正确的 `UPSTREAM_API_KEY` 重新安装 |
+| MiMo 提示 `Not supported model` | MiMo 模型名不正确 | 使用 `mimo-v2.5-pro` 或 MiMo 官方文档里的真实模型名 |
+| 健康检查显示的 provider 不对 | 当前安装的是旧 provider | 使用目标 provider 重新运行 `setup.sh` |
+| 端口被占用 | `3099` 已被占用 | 使用 `PROXY_PORT=3100` |
 
 ## 安全说明
 
-不要提交或分享：
+不要提交或分享你的 API Key。
 
-```txt
-~/Library/LaunchAgents/com.local.model-proxy.plist
-~/.local/model-proxy/proxy.log
-~/.local/model-proxy/proxy.err
-```
+不要分享这些本地文件：
 
-这些文件可能包含本机路径、请求信息或 API Key。
+    ~/Library/LaunchAgents/com.local.model-proxy.plist
+    ~/.local/model-proxy/proxy.log
+    ~/.local/model-proxy/proxy.err
 
-不要把 DeepSeek API Key 提交到仓库。
+它们可能包含本机路径、请求信息或 API Key。
 
 ## License
 
