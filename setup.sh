@@ -38,6 +38,7 @@ PROVIDER="${PROVIDER:-deepseek}"
 
 case "$PROVIDER" in
   deepseek)
+    DEFAULT_UPSTREAM_API_FORMAT="anthropic"
     DEFAULT_UPSTREAM_BASE_URL="https://api.deepseek.com/anthropic"
     DEFAULT_MODEL_RULES_JSON='[
       {"match":"haiku","target":"deepseek-v4-flash"},
@@ -48,6 +49,7 @@ case "$PROVIDER" in
     ;;
 
   mimo)
+    DEFAULT_UPSTREAM_API_FORMAT="anthropic"
     DEFAULT_UPSTREAM_BASE_URL="https://token-plan-cn.xiaomimimo.com/anthropic"
     DEFAULT_MODEL_RULES_JSON='[
       {"match":"haiku","target":"mimo-v2.5-pro"},
@@ -57,16 +59,30 @@ case "$PROVIDER" in
     DEFAULT_FALLBACK_MODEL="mimo-v2.5-pro"
     ;;
 
+  custom-responses)
+    DEFAULT_UPSTREAM_API_FORMAT="responses"
+    DEFAULT_UPSTREAM_BASE_URL="https://www.msutools.cn/v1"
+    DEFAULT_MODEL_RULES_JSON='[
+      {"match":"haiku","target":"gpt-5.5"},
+      {"match":"opus","target":"gpt-5.5"},
+      {"match":"sonnet","target":"gpt-5.5"}
+    ]'
+    DEFAULT_FALLBACK_MODEL="gpt-5.5"
+    ;;
+
   *)
     echo "未知 PROVIDER: $PROVIDER"
-    echo "支持的 PROVIDER: deepseek, mimo"
+    echo "支持的 PROVIDER: deepseek, mimo, custom-responses"
     exit 1
     ;;
 esac
 
+UPSTREAM_API_FORMAT="${UPSTREAM_API_FORMAT:-$DEFAULT_UPSTREAM_API_FORMAT}"
 UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-$DEFAULT_UPSTREAM_BASE_URL}"
 MODEL_RULES_JSON="${MODEL_RULES_JSON:-$DEFAULT_MODEL_RULES_JSON}"
 FALLBACK_MODEL="${FALLBACK_MODEL:-$DEFAULT_FALLBACK_MODEL}"
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
+DISABLE_RESPONSE_STORAGE="${DISABLE_RESPONSE_STORAGE:-true}"
 
 UPSTREAM_API_KEY="${UPSTREAM_API_KEY:-${DEEPSEEK_API_KEY:-}}"
 
@@ -150,6 +166,9 @@ cat > "$PLIST_PATH" <<PLIST_EOF
     <key>UPSTREAM_API_KEY</key>
     <string>${UPSTREAM_API_KEY}</string>
 
+    <key>UPSTREAM_API_FORMAT</key>
+    <string>${UPSTREAM_API_FORMAT}</string>
+
     <key>UPSTREAM_BASE_URL</key>
     <string>${UPSTREAM_BASE_URL}</string>
 
@@ -161,6 +180,12 @@ cat > "$PLIST_PATH" <<PLIST_EOF
 
     <key>PROXY_PORT</key>
     <string>${PROXY_PORT}</string>
+
+    <key>MODEL_REASONING_EFFORT</key>
+    <string>${MODEL_REASONING_EFFORT}</string>
+
+    <key>DISABLE_RESPONSE_STORAGE</key>
+    <string>${DISABLE_RESPONSE_STORAGE}</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -251,6 +276,7 @@ ok "Claude Desktop 配置已更新: $CLAUDE_CONFIG"
 echo
 echo -e "${GREEN}${BOLD}安装完成！${NC}"
 echo "  当前 Provider: ${PROVIDER}"
+echo "  API 格式: ${UPSTREAM_API_FORMAT}"
 echo "  上游地址: ${UPSTREAM_BASE_URL}"
 echo
 echo "下一步："

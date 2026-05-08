@@ -5,7 +5,7 @@
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-A local macOS gateway that lets Claude Desktop use DeepSeek, MiMo, and other Anthropic-compatible model providers.
+A local macOS gateway that lets Claude Desktop use DeepSeek, MiMo, OpenAI Responses API gateways, and other model providers.
 
 Claude Desktop Gateway expects Claude-style model names such as `claude-haiku-4-5` and `claude-opus-4-7`. Many third-party model providers use their own model names. This project runs a small local proxy that translates those model names and forwards requests to your selected provider.
 
@@ -19,6 +19,7 @@ The local gateway then forwards requests to the provider you choose:
 
 - DeepSeek
 - MiMo
+- OpenAI Responses API gateways, such as a GPT 5.5 gateway
 - other Anthropic-compatible APIs
 
 Basic flow:
@@ -32,6 +33,8 @@ The gateway also removes dynamic `cch=...` values injected into the system promp
 - Works with Claude Desktop Gateway
 - Supports DeepSeek by default
 - Supports MiMo as a built-in provider
+- Supports `custom-responses` for OpenAI Responses API gateways
+- Converts Anthropic tools to Responses function calling and back
 - Supports custom Anthropic-compatible providers
 - Maps Claude model names to provider model names
 - Runs locally on macOS
@@ -83,6 +86,12 @@ If Node.js is missing, the installer will try to install it with Homebrew.
     chmod +x setup.sh uninstall.sh
     PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
 
+### Use a GPT 5.5 Responses Gateway
+
+    cd ~/Downloads/model-proxy
+    chmod +x setup.sh uninstall.sh
+    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
+
 After installation, fully quit and reopen Claude Desktop.
 
 Use:
@@ -129,6 +138,7 @@ The gateway includes provider presets.
 |---|---|---|
 | `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`, Opus/Sonnet -> `deepseek-v4-pro` |
 | `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
+| `custom-responses` | `https://www.msutools.cn/v1` | Haiku/Opus/Sonnet -> `gpt-5.5` |
 
 To switch providers, run `setup.sh` again with another provider.
 
@@ -139,6 +149,10 @@ DeepSeek:
 MiMo:
 
     PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
+
+GPT 5.5 Responses gateway:
+
+    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
 
 Claude Desktop still uses the same local URL:
 
@@ -178,6 +192,44 @@ If your MiMo account supports 1M context models, you can use the `[1m]` suffix:
     FALLBACK_MODEL='mimo-v2.5-pro[1m]' \
     bash setup.sh
 
+### GPT 5.5 Responses Gateway
+
+`custom-responses` uses the OpenAI Responses API wire format. It is not an Anthropic-compatible endpoint. The proxy converts Claude Desktop Anthropic Messages requests into Responses requests, then converts Responses output back into Anthropic Messages / SSE.
+
+Default mapping:
+
+| Claude Desktop model contains | Provider model |
+|---|---|
+| `haiku` | `gpt-5.5` |
+| `opus` | `gpt-5.5` |
+| `sonnet` | `gpt-5.5` |
+| other | `gpt-5.5` |
+
+Use the default GPT 5.5 mapping:
+
+    PROVIDER=custom-responses \
+    UPSTREAM_API_KEY=your-key \
+    bash setup.sh
+
+If your gateway currently exposes `gpt-5.4`, switch the mapping:
+
+    PROVIDER=custom-responses \
+    UPSTREAM_API_KEY=your-key \
+    MODEL_RULES_JSON='[
+      {"match":"haiku","target":"gpt-5.4"},
+      {"match":"opus","target":"gpt-5.4"},
+      {"match":"sonnet","target":"gpt-5.4"}
+    ]' \
+    FALLBACK_MODEL='gpt-5.4' \
+    bash setup.sh
+
+Tool support:
+
+- Supports common Claude Desktop / MCP JSON Schema tools
+- Converts Anthropic `tool_use` / `tool_result` to Responses `function_call` / `function_call_output`
+- Supports streaming text and streaming tool argument deltas
+- Does not map images, documents, extended thinking, or OpenAI built-in `web_search` / `file_search` / `computer_use` tools
+
 ## Custom Provider
 
 You can use any Anthropic-compatible provider by setting these variables:
@@ -197,11 +249,14 @@ You can use any Anthropic-compatible provider by setting these variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROVIDER` | `deepseek` | Provider preset. Supports `deepseek`, `mimo`, or `custom` |
+| `PROVIDER` | `deepseek` | Provider preset. Supports `deepseek`, `mimo`, or `custom-responses` |
+| `UPSTREAM_API_FORMAT` | provider preset | Upstream API format. Supports `anthropic` or `responses` |
 | `UPSTREAM_API_KEY` | required | API key for the selected provider |
-| `UPSTREAM_BASE_URL` | provider preset | Custom Anthropic-compatible API URL |
+| `UPSTREAM_BASE_URL` | provider preset | Upstream API URL |
 | `MODEL_RULES_JSON` | provider preset | Custom model mapping rules |
 | `FALLBACK_MODEL` | provider preset | Model used when no rule matches |
+| `MODEL_REASONING_EFFORT` | `high` | Reasoning effort for Responses providers |
+| `DISABLE_RESPONSE_STORAGE` | `true` | Sets `store:false` for Responses providers |
 | `PROXY_PORT` | `3099` | Local gateway port |
 
 Backward compatibility:
@@ -230,6 +285,12 @@ For MiMo, you should see:
 
     收到模型名     : "claude-opus-4-7"
     转发模型名     : "mimo-v2.5-pro"
+
+For the GPT 5.5 Responses gateway, you should see:
+
+    API格式        : responses
+    收到模型名     : "claude-opus-4-7"
+    转发模型名     : "gpt-5.5"
 
 ## Common Commands
 
