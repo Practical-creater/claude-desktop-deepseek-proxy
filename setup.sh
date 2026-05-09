@@ -63,11 +63,11 @@ case "$PROVIDER" in
     DEFAULT_UPSTREAM_API_FORMAT="responses"
     DEFAULT_UPSTREAM_BASE_URL="https://www.msutools.cn/v1"
     DEFAULT_MODEL_RULES_JSON='[
-      {"match":"haiku","target":"gpt-5.5"},
       {"match":"opus","target":"gpt-5.5"},
-      {"match":"sonnet","target":"gpt-5.5"}
+      {"match":"sonnet","target":"gpt-5.4"},
+      {"match":"haiku","target":"gpt-5.4-mini"}
     ]'
-    DEFAULT_FALLBACK_MODEL="gpt-5.5"
+    DEFAULT_FALLBACK_MODEL="gpt-5.4-mini"
     ;;
 
   *)

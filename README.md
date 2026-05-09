@@ -138,7 +138,7 @@ The gateway includes provider presets.
 |---|---|---|
 | `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`, Opus/Sonnet -> `deepseek-v4-pro` |
 | `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
-| `custom-responses` | `https://www.msutools.cn/v1` | Haiku/Opus/Sonnet -> `gpt-5.5` |
+| `custom-responses` | `https://www.msutools.cn/v1` | Haiku -> `gpt-5.4-mini`, Sonnet -> `gpt-5.4`, Opus -> `gpt-5.5` |
 
 To switch providers, run `setup.sh` again with another provider.
 
@@ -200,27 +200,27 @@ Default mapping:
 
 | Claude Desktop model contains | Provider model |
 |---|---|
-| `haiku` | `gpt-5.5` |
+| `haiku` | `gpt-5.4-mini` |
 | `opus` | `gpt-5.5` |
-| `sonnet` | `gpt-5.5` |
-| other | `gpt-5.5` |
+| `sonnet` | `gpt-5.4` |
+| other | `gpt-5.4-mini` |
 
-Use the default GPT 5.5 mapping:
+Use the default tiered mapping:
 
     PROVIDER=custom-responses \
     UPSTREAM_API_KEY=your-key \
     bash setup.sh
 
-If your gateway currently exposes `gpt-5.4`, switch the mapping:
+If you want all Claude Desktop models to use `gpt-5.5`, override the mapping:
 
     PROVIDER=custom-responses \
     UPSTREAM_API_KEY=your-key \
     MODEL_RULES_JSON='[
-      {"match":"haiku","target":"gpt-5.4"},
-      {"match":"opus","target":"gpt-5.4"},
-      {"match":"sonnet","target":"gpt-5.4"}
+      {"match":"haiku","target":"gpt-5.5"},
+      {"match":"opus","target":"gpt-5.5"},
+      {"match":"sonnet","target":"gpt-5.5"}
     ]' \
-    FALLBACK_MODEL='gpt-5.4' \
+    FALLBACK_MODEL='gpt-5.5' \
     bash setup.sh
 
 Tool support:

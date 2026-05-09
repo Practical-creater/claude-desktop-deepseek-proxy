@@ -138,7 +138,7 @@ Claude Desktop 永远只需要连接本地网关：
 |---|---|---|
 | `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`，Opus/Sonnet -> `deepseek-v4-pro` |
 | `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
-| `custom-responses` | `https://www.msutools.cn/v1` | Haiku/Opus/Sonnet -> `gpt-5.5` |
+| `custom-responses` | `https://www.msutools.cn/v1` | Haiku -> `gpt-5.4-mini`，Sonnet -> `gpt-5.4`，Opus -> `gpt-5.5` |
 
 切换 provider 只需要重新运行安装脚本。
 
@@ -200,27 +200,27 @@ Claude Desktop 仍然只需要使用同一个本地地址：
 
 | Claude Desktop 模型名包含 | 上游模型 |
 |---|---|
-| `haiku` | `gpt-5.5` |
+| `haiku` | `gpt-5.4-mini` |
 | `opus` | `gpt-5.5` |
-| `sonnet` | `gpt-5.5` |
-| 其他 | `gpt-5.5` |
+| `sonnet` | `gpt-5.4` |
+| 其他 | `gpt-5.4-mini` |
 
-使用默认 GPT 5.5：
+使用默认分层映射：
 
     PROVIDER=custom-responses \
     UPSTREAM_API_KEY=your-key \
     bash setup.sh
 
-如果你的中转站当前默认或可用模型是 `gpt-5.4`，可以这样切换：
+如果你想让 Claude Desktop 的所有模型都使用 `gpt-5.5`，可以这样覆盖映射：
 
     PROVIDER=custom-responses \
     UPSTREAM_API_KEY=your-key \
     MODEL_RULES_JSON='[
-      {"match":"haiku","target":"gpt-5.4"},
-      {"match":"opus","target":"gpt-5.4"},
-      {"match":"sonnet","target":"gpt-5.4"}
+      {"match":"haiku","target":"gpt-5.5"},
+      {"match":"opus","target":"gpt-5.5"},
+      {"match":"sonnet","target":"gpt-5.5"}
     ]' \
-    FALLBACK_MODEL='gpt-5.4' \
+    FALLBACK_MODEL='gpt-5.5' \
     bash setup.sh
 
 工具调用支持范围：

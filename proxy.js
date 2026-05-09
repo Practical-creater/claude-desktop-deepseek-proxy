@@ -46,11 +46,11 @@ const PROVIDER_PRESETS = {
   'custom-responses': {
     apiFormat: 'responses',
     baseUrl: 'https://www.msutools.cn/v1',
-    fallbackModel: 'gpt-5.5',
+    fallbackModel: 'gpt-5.4-mini',
     modelRules: [
-      { match: 'haiku', target: 'gpt-5.5' },
       { match: 'opus', target: 'gpt-5.5' },
-      { match: 'sonnet', target: 'gpt-5.5' },
+      { match: 'sonnet', target: 'gpt-5.4' },
+      { match: 'haiku', target: 'gpt-5.4-mini' },
     ],
   },
 };
@@ -196,6 +196,26 @@ function safeJsonPrefix(value, maxLen = 500) {
   }
 }
 
+function formatLogTime(date = new Date()) {
+  const pad = (value, len = 2) => String(value).padStart(len, '0');
+
+  return [
+    date.getFullYear(),
+    '-',
+    pad(date.getMonth() + 1),
+    '-',
+    pad(date.getDate()),
+    ' ',
+    pad(date.getHours()),
+    ':',
+    pad(date.getMinutes()),
+    ':',
+    pad(date.getSeconds()),
+    '.',
+    pad(date.getMilliseconds(), 3),
+  ].join('');
+}
+
 function sendJson(res, statusCode, value) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(value));
@@ -259,16 +279,16 @@ function buildAnthropicBody(bodyObj) {
   const originalModel = bodyObj.model || '';
   const targetModel = resolveModel(originalModel);
 
-  console.log(`[${new Date().toISOString()}]`);
+  console.log(`[${formatLogTime()}]`);
   console.log(`  API格式        : anthropic`);
   console.log(`  收到模型名     : "${originalModel}"`);
-  console.log(`  原始system前缀 : ${safeJsonPrefix(bodyObj.system, 500)}`);
 
   bodyObj.system = normalizeSystemForCache(bodyObj.system);
   bodyObj.model = targetModel;
 
   console.log(`  转发模型名     : "${targetModel}"`);
-  console.log(`  转发system前缀 : ${safeJsonPrefix(bodyObj.system, 500)}`);
+  console.log(`  stream         : ${bodyObj.stream === true}`);
+  console.log(`  tools          : ${Array.isArray(bodyObj.tools) ? bodyObj.tools.length : 0}`);
 
   return Buffer.from(JSON.stringify(bodyObj), 'utf8');
 }
@@ -581,12 +601,12 @@ function buildResponsesRequest(bodyObj) {
   const targetModel = resolveModel(originalModel);
   const normalizedSystem = normalizeSystemForCache(bodyObj.system);
 
-  console.log(`[${new Date().toISOString()}]`);
+  console.log(`[${formatLogTime()}]`);
   console.log(`  API格式        : responses`);
   console.log(`  收到模型名     : "${originalModel}"`);
   console.log(`  转发模型名     : "${targetModel}"`);
-  console.log(`  原始system前缀 : ${safeJsonPrefix(bodyObj.system, 500)}`);
-  console.log(`  转发system前缀 : ${safeJsonPrefix(normalizedSystem, 500)}`);
+  console.log(`  stream         : ${bodyObj.stream === true}`);
+  console.log(`  tools          : ${Array.isArray(bodyObj.tools) ? bodyObj.tools.length : 0}`);
 
   const requestBody = {
     model: targetModel,
@@ -1055,7 +1075,7 @@ const server = http.createServer(async (req, res) => {
       bodyObj = JSON.parse(rawBody.toString('utf8'));
     } catch (e) {
       if (UPSTREAM_API_FORMAT === 'anthropic') {
-        console.log(`[${new Date().toISOString()}]`);
+        console.log(`[${formatLogTime()}]`);
         console.log(`  PATH           : ${req.url}`);
         console.log(`  JSON解析失败    : ${e.message}`);
         console.log(`  处理方式       : 原样透传`);
