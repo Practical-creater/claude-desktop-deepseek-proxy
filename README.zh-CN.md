@@ -308,9 +308,25 @@ GPT 5.5 Responses 中转站正常时，日志中应该能看到：
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load "$PLIST"
 
+临时停止服务：
+
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl unload "$PLIST"
+
+重新启动服务：
+
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl load "$PLIST"
+
 检查脚本语法：
 
     node --check ~/.local/model-proxy/proxy.js
+
+说明：
+
+- 临时停止只会停掉后台代理进程，不会删除安装文件，也不会恢复 Claude Desktop 的 `gateway` 配置
+- 如果服务停掉了，但 Claude Desktop 仍然指向 `http://127.0.0.1:3099`，Claude Desktop 会连接失败
+- 想恢复使用时，重新执行 `launchctl load "$PLIST"` 即可
 
 ## 卸载
 
@@ -326,6 +342,18 @@ GPT 5.5 Responses 中转站正常时，日志中应该能看到：
 - 备份旧的 Claude Desktop 配置
 
 卸载后请重启 Claude Desktop。
+
+如果卸载后想重新使用，重新运行安装命令即可。
+
+例如 GPT 5.5 Responses 中转站：
+
+    cd ~/Downloads/model-proxy
+    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
+
+例如 DeepSeek：
+
+    cd ~/Downloads/model-proxy
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
 
 ## 故障排查
 

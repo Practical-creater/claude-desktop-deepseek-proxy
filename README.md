@@ -308,9 +308,25 @@ Restart service:
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load "$PLIST"
 
+Temporarily stop the service:
+
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl unload "$PLIST"
+
+Start the service again:
+
+    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
+    launchctl load "$PLIST"
+
 Check script syntax:
 
     node --check ~/.local/model-proxy/proxy.js
+
+Notes:
+
+- Temporarily stopping the service only stops the background proxy process
+- It does not remove installed files or restore Claude Desktop's `gateway` config
+- If Claude Desktop still points to `http://127.0.0.1:3099` while the service is stopped, requests will fail until you start it again
 
 ## Uninstall
 
@@ -326,6 +342,18 @@ The uninstaller will:
 - back up the old Claude Desktop config
 
 Restart Claude Desktop after uninstalling.
+
+If you want to use it again after uninstalling, rerun the installer command.
+
+For a GPT 5.5 Responses gateway:
+
+    cd ~/Downloads/model-proxy
+    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
+
+For DeepSeek:
+
+    cd ~/Downloads/model-proxy
+    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
 
 ## Troubleshooting
 
