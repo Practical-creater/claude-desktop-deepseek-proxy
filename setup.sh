@@ -34,6 +34,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_DIR="$HOME/.local/model-proxy"
 PROXY_PORT="${PROXY_PORT:-3099}"
 
+# 多供应商模式：MULTI=1 时启用 routes.json/secrets.json 路由
+# - secrets.json 强制 chmod 600（API key 不暴露在 plist 里）
+# - Claude Desktop 选择器会显示 6 个 claude- 前缀别名
+MULTI="${MULTI:-0}"
+
 PROVIDER="${PROVIDER:-deepseek}"
 
 case "$PROVIDER" in
@@ -99,16 +104,39 @@ header "步骤 0 / 6  检查文件"
 
 ok "必要文件存在"
 
-header "步骤 1 / 6  读取 DeepSeek API Key"
+if [[ "$MULTI" == "1" ]]; then
+  header "步骤 1 / 6  读取多供应商 API Keys"
 
-if [[ -z "${UPSTREAM_API_KEY:-}" ]]; then
-  read -rsp "请粘贴 ${PROVIDER} API Key（输入不显示）: " UPSTREAM_API_KEY
-  echo
+  if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+    read -rsp "请粘贴 DeepSeek API Key（输入不显示）: " DEEPSEEK_API_KEY
+    echo
+  fi
+  if [[ -z "${MIMO_API_KEY:-}" ]]; then
+    read -rsp "请粘贴 Mimo API Key（输入不显示）: " MIMO_API_KEY
+    echo
+  fi
+  if [[ -z "${MSU_API_KEY:-}" ]]; then
+    read -rsp "请粘贴 中转站 (msutools.cn) API Key（输入不显示）: " MSU_API_KEY
+    echo
+  fi
+
+  [[ -z "$DEEPSEEK_API_KEY" ]] && die "DEEPSEEK_API_KEY 不能为空"
+  [[ -z "$MIMO_API_KEY" ]]     && die "MIMO_API_KEY 不能为空"
+  [[ -z "$MSU_API_KEY" ]]      && die "MSU_API_KEY 不能为空"
+
+  ok "三个 API Key 已读取"
+else
+  header "步骤 1 / 6  读取 ${PROVIDER} API Key"
+
+  if [[ -z "${UPSTREAM_API_KEY:-}" ]]; then
+    read -rsp "请粘贴 ${PROVIDER} API Key（输入不显示）: " UPSTREAM_API_KEY
+    echo
+  fi
+
+  [[ -z "$UPSTREAM_API_KEY" ]] && die "API Key 不能为空"
+
+  ok "API Key 已读取"
 fi
-
-[[ -z "$UPSTREAM_API_KEY" ]] && die "API Key 不能为空"
-
-ok "API Key 已读取"
 
 header "步骤 2 / 6  检查 Node.js"
 
@@ -140,27 +168,99 @@ node --check "$PROXY_DIR/proxy.js" >/dev/null
 
 ok "proxy.js 已安装到 $PROXY_DIR/proxy.js"
 
+if [[ "$MULTI" == "1" ]]; then
+  ROUTES_PATH="$PROXY_DIR/routes.json"
+  SECRETS_PATH="$PROXY_DIR/secrets.json"
+
+  cat > "$ROUTES_PATH" <<'ROUTES_EOF'
+{
+  // ─────────────────────────────────────────────────────────────────
+  // 多供应商路由表
+  // 格式：别名 → { apiFormat, baseUrl, secretId, targetModel }
+  //
+  // - 别名必须包含 "claude/sonnet/opus/haiku/anthropic" 任一关键字才能
+  //   通过 Claude Desktop 1.6259.1+ 的客户端校验
+  // - apiFormat: "anthropic" 或 "responses"
+  // - secretId 引用 secrets.json 里的 key
+  // ─────────────────────────────────────────────────────────────────
+
+  // === DeepSeek ===
+  "claude-deepseek-v4-pro": {
+    "apiFormat": "anthropic",
+    "baseUrl":   "https://api.deepseek.com/anthropic",
+    "secretId":  "deepseek",
+    "targetModel": "deepseek-v4-pro"
+  },
+  "claude-deepseek-v4-flash": {
+    "apiFormat": "anthropic",
+    "baseUrl":   "https://api.deepseek.com/anthropic",
+    "secretId":  "deepseek",
+    "targetModel": "deepseek-v4-flash"
+  },
+
+  // === Mimo ===
+  "claude-mimo-v2.5-pro": {
+    "apiFormat": "anthropic",
+    "baseUrl":   "https://token-plan-cn.xiaomimimo.com/anthropic",
+    "secretId":  "mimo",
+    "targetModel": "mimo-v2.5-pro"
+  },
+
+  // === 中转站 (msutools.cn, OpenAI Responses API) ===
+  "claude-gpt-5.5": {
+    "apiFormat": "responses",
+    "baseUrl":   "https://www.msutools.cn/v1",
+    "secretId":  "msu",
+    "targetModel": "gpt-5.5"
+  },
+  "claude-gpt-5.4": {
+    "apiFormat": "responses",
+    "baseUrl":   "https://www.msutools.cn/v1",
+    "secretId":  "msu",
+    "targetModel": "gpt-5.4"
+  },
+  "claude-gpt-5.4-mini": {
+    "apiFormat": "responses",
+    "baseUrl":   "https://www.msutools.cn/v1",
+    "secretId":  "msu",
+    "targetModel": "gpt-5.4-mini"
+  }
+}
+ROUTES_EOF
+  ok "routes.json 已写入 $ROUTES_PATH"
+
+  # 用 node 写 secrets.json，避免在 shell 里 escape JSON 字符串
+  node - "$SECRETS_PATH" "$DEEPSEEK_API_KEY" "$MIMO_API_KEY" "$MSU_API_KEY" <<'NODE_EOF'
+const fs = require('fs');
+const [, , out, deepseek, mimo, msu] = process.argv;
+fs.writeFileSync(out, JSON.stringify({ deepseek, mimo, msu }, null, 2) + '\n', { mode: 0o600 });
+NODE_EOF
+  chmod 600 "$SECRETS_PATH"
+  ok "secrets.json 已写入 $SECRETS_PATH (chmod 600)"
+fi
+
 header "步骤 4 / 6  创建 launchd 服务"
 
 mkdir -p "$HOME/Library/LaunchAgents"
 
-cat > "$PLIST_PATH" <<PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${PLIST_LABEL}</string>
+# 多模式不在 plist 里塞 UPSTREAM_API_KEY（key 已经在 chmod 600 的 secrets.json 里）
+if [[ "$MULTI" == "1" ]]; then
+ENV_BLOCK=$(cat <<ENV_EOF
+    <key>PROXY_PORT</key>
+    <string>${PROXY_PORT}</string>
 
-  <key>ProgramArguments</key>
-  <array>
-    <string>${NODE_BIN}</string>
-    <string>${PROXY_DIR}/proxy.js</string>
-  </array>
+    <key>MODEL_REASONING_EFFORT</key>
+    <string>${MODEL_REASONING_EFFORT}</string>
 
-  <key>EnvironmentVariables</key>
-  <dict>
+    <key>DISABLE_RESPONSE_STORAGE</key>
+    <string>${DISABLE_RESPONSE_STORAGE}</string>
+
+    <key>IMAGE_DETAIL</key>
+    <string>${IMAGE_DETAIL}</string>
+ENV_EOF
+)
+else
+ENV_BLOCK=$(cat <<ENV_EOF
     <key>PROVIDER</key>
     <string>${PROVIDER}</string>
 
@@ -190,6 +290,28 @@ cat > "$PLIST_PATH" <<PLIST_EOF
 
     <key>IMAGE_DETAIL</key>
     <string>${IMAGE_DETAIL}</string>
+ENV_EOF
+)
+fi
+
+cat > "$PLIST_PATH" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${PLIST_LABEL}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>${NODE_BIN}</string>
+    <string>${PROXY_DIR}/proxy.js</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+${ENV_BLOCK}
   </dict>
 
   <key>RunAtLoad</key>
@@ -247,11 +369,29 @@ if [[ -f "$CLAUDE_CONFIG" ]]; then
   info "已备份原配置"
 fi
 
-node - "$CLAUDE_CONFIG" "$PROXY_PORT" <<'NODE_EOF'
+if [[ "$MULTI" == "1" ]]; then
+  INFERENCE_MODELS_JSON='[
+    "claude-deepseek-v4-pro",
+    "claude-deepseek-v4-flash",
+    "claude-mimo-v2.5-pro",
+    "claude-gpt-5.5",
+    "claude-gpt-5.4",
+    "claude-gpt-5.4-mini"
+  ]'
+else
+  INFERENCE_MODELS_JSON='[
+    "claude-haiku-4-5",
+    "claude-opus-4-7",
+    "claude-sonnet-4-5"
+  ]'
+fi
+
+node - "$CLAUDE_CONFIG" "$PROXY_PORT" "$INFERENCE_MODELS_JSON" <<'NODE_EOF'
 const fs = require('fs');
 
 const configPath = process.argv[2];
 const port = process.argv[3];
+const inferenceModels = JSON.parse(process.argv[4]);
 
 let cfg = {};
 
@@ -265,11 +405,7 @@ try {
 
 cfg.gateway = {
   url: `http://127.0.0.1:${port}`,
-  inferenceModels: [
-    'claude-haiku-4-5',
-    'claude-opus-4-7',
-    'claude-sonnet-4-5'
-  ]
+  inferenceModels,
 };
 
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n');
@@ -279,9 +415,15 @@ ok "Claude Desktop 配置已更新: $CLAUDE_CONFIG"
 
 echo
 echo -e "${GREEN}${BOLD}安装完成！${NC}"
-echo "  当前 Provider: ${PROVIDER}"
-echo "  API 格式: ${UPSTREAM_API_FORMAT}"
-echo "  上游地址: ${UPSTREAM_BASE_URL}"
+if [[ "$MULTI" == "1" ]]; then
+  echo "  模式: 多供应商 (routes.json)"
+  echo "  路由文件: ${PROXY_DIR}/routes.json"
+  echo "  密钥文件: ${PROXY_DIR}/secrets.json (chmod 600)"
+else
+  echo "  当前 Provider: ${PROVIDER}"
+  echo "  API 格式: ${UPSTREAM_API_FORMAT}"
+  echo "  上游地址: ${UPSTREAM_BASE_URL}"
+fi
 echo
 echo "下一步："
 echo "  1. 完全退出 Claude Desktop，不是只关窗口"

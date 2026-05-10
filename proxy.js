@@ -11,6 +11,9 @@
 
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 基础配置
@@ -119,6 +122,148 @@ function resolveModel(name = '') {
     if (rule.match.test(name)) return rule.target;
   }
   return FALLBACK_MODEL;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 多供应商路由（routes.json + secrets.json）
+//
+// 触发条件：~/.local/model-proxy/routes.json 存在
+// 触发后：每条请求按 bodyObj.model 查路由表，使用对应 baseUrl/apiKey/apiFormat
+// 不存在时：维持单上游模式（沿用 UPSTREAM_API_KEY 等环境变量）
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PROXY_HOME = process.env.MODEL_PROXY_HOME ||
+  path.join(os.homedir(), '.local', 'model-proxy');
+const ROUTES_PATH = path.join(PROXY_HOME, 'routes.json');
+const SECRETS_PATH = path.join(PROXY_HOME, 'secrets.json');
+
+// 简易 JSON-with-comments 解析：支持 // 和 /* */ 注释。
+// 不处理字符串里偶然出现的 // 序列（足够路由配置场景使用）。
+function parseJsonWithComments(text) {
+  let out = '';
+  let i = 0;
+  let inString = false;
+  let stringQuote = '';
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (inString) {
+      out += ch;
+      if (ch === '\\') {
+        if (i + 1 < text.length) {
+          out += text[i + 1];
+          i += 2;
+          continue;
+        }
+      } else if (ch === stringQuote) {
+        inString = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      stringQuote = ch;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+  return JSON.parse(out);
+}
+
+function loadSecrets() {
+  if (!fs.existsSync(SECRETS_PATH)) return {};
+  const stat = fs.statSync(SECRETS_PATH);
+  // 强制 600 权限，否则拒绝加载（保护 API key）
+  const mode = stat.mode & 0o777;
+  if (mode !== 0o600) {
+    console.error(`[proxy] secrets.json 权限不安全 (mode=${mode.toString(8)})，应为 600`);
+    console.error(`[proxy] 修复: chmod 600 "${SECRETS_PATH}"`);
+    process.exit(1);
+  }
+  const text = fs.readFileSync(SECRETS_PATH, 'utf8');
+  try {
+    return parseJsonWithComments(text);
+  } catch (e) {
+    console.error('[proxy] secrets.json 解析失败:', e.message);
+    process.exit(1);
+  }
+}
+
+function loadRoutes() {
+  if (!fs.existsSync(ROUTES_PATH)) return null;
+  const text = fs.readFileSync(ROUTES_PATH, 'utf8');
+  let raw;
+  try {
+    raw = parseJsonWithComments(text);
+  } catch (e) {
+    console.error('[proxy] routes.json 解析失败:', e.message);
+    process.exit(1);
+  }
+
+  const secrets = loadSecrets();
+  const routes = {};
+  for (const [aliasName, def] of Object.entries(raw)) {
+    if (!def || typeof def !== 'object') {
+      console.error(`[proxy] routes.json 条目 "${aliasName}" 不是对象，跳过`);
+      continue;
+    }
+    const { apiFormat, baseUrl, secretId, targetModel } = def;
+    if (!apiFormat || !baseUrl || !secretId || !targetModel) {
+      console.error(`[proxy] routes.json 条目 "${aliasName}" 缺字段，需要 apiFormat/baseUrl/secretId/targetModel`);
+      continue;
+    }
+    if (apiFormat !== 'anthropic' && apiFormat !== 'responses') {
+      console.error(`[proxy] routes.json 条目 "${aliasName}" apiFormat 非法: ${apiFormat}`);
+      continue;
+    }
+    const apiKey = secrets[secretId];
+    if (!apiKey) {
+      console.error(`[proxy] routes.json 条目 "${aliasName}" 引用的 secretId="${secretId}" 在 secrets.json 中找不到`);
+      continue;
+    }
+    routes[aliasName] = {
+      apiFormat,
+      baseUrl: String(baseUrl).replace(/\/$/, ''),
+      apiKey,
+      targetModel,
+    };
+  }
+  return routes;
+}
+
+const ROUTES = loadRoutes();
+const MULTI_MODE = ROUTES !== null;
+
+function resolveRoute(originalModel) {
+  if (MULTI_MODE) {
+    return ROUTES[originalModel] || null;
+  }
+  // 单上游模式：合成一个 route 复用同一套转发逻辑
+  return {
+    apiFormat: UPSTREAM_API_FORMAT,
+    baseUrl: UPSTREAM_BASE_URL,
+    apiKey: UPSTREAM_API_KEY,
+    targetModel: resolveModel(originalModel),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,10 +397,10 @@ function readResponseBody(proxyRes) {
   });
 }
 
-function createUpstreamHeaders(upstreamUrl, sendBody, extra = {}) {
+function createUpstreamHeaders(upstreamUrl, sendBody, apiKey, extra = {}) {
   const headers = {
     host: upstreamUrl.host,
-    authorization: `Bearer ${UPSTREAM_API_KEY}`,
+    authorization: `Bearer ${apiKey}`,
     'content-type': 'application/json',
     'content-length': String(sendBody.length),
     ...extra,
@@ -285,9 +430,8 @@ function requestUpstream(upstreamUrl, method, headers, sendBody, onResponse, onE
 // Anthropic-compatible 透传
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildAnthropicBody(bodyObj) {
+function buildAnthropicBody(bodyObj, targetModel) {
   const originalModel = bodyObj.model || '';
-  const targetModel = resolveModel(originalModel);
 
   console.log(`[${formatLogTime()}]`);
   console.log(`  API格式        : anthropic`);
@@ -303,18 +447,18 @@ function buildAnthropicBody(bodyObj) {
   return Buffer.from(JSON.stringify(bodyObj), 'utf8');
 }
 
-function forwardAnthropic(req, res, rawBody, bodyObj) {
+function forwardAnthropic(req, res, rawBody, bodyObj, route) {
   let sendBody = rawBody;
 
   if (req.method === 'POST' && rawBody.length > 0 && bodyObj) {
-    sendBody = buildAnthropicBody(bodyObj);
+    sendBody = buildAnthropicBody(bodyObj, route.targetModel);
   }
 
-  const upstreamUrl = new URL(`${UPSTREAM_BASE_URL}${req.url}`);
+  const upstreamUrl = new URL(`${route.baseUrl}${req.url}`);
   const upstreamHeaders = {
     ...req.headers,
     host: upstreamUrl.host,
-    authorization: `Bearer ${UPSTREAM_API_KEY}`,
+    authorization: `Bearer ${route.apiKey}`,
     'content-length': String(sendBody.length),
   };
 
@@ -643,9 +787,8 @@ function convertToolChoiceToResponses(toolChoice) {
   throw new Error(`unsupported tool_choice.type: ${toolChoice.type}`);
 }
 
-function buildResponsesRequest(bodyObj) {
+function buildResponsesRequest(bodyObj, targetModel) {
   const originalModel = bodyObj.model || '';
-  const targetModel = resolveModel(originalModel);
   const normalizedSystem = normalizeSystemForCache(bodyObj.system);
 
   console.log(`[${formatLogTime()}]`);
@@ -1008,7 +1151,7 @@ function handleResponsesStream(proxyRes, res, model) {
   });
 }
 
-function forwardResponses(req, res, bodyObj) {
+function forwardResponses(req, res, bodyObj, route) {
   if (req.method !== 'POST') {
     sendProxyError(res, 405, 'responses mode only supports POST requests');
     return;
@@ -1016,16 +1159,16 @@ function forwardResponses(req, res, bodyObj) {
 
   let built;
   try {
-    built = buildResponsesRequest(bodyObj);
+    built = buildResponsesRequest(bodyObj, route.targetModel);
   } catch (e) {
     sendProxyError(res, 400, e.message);
     return;
   }
 
-  const upstreamUrl = new URL(`${UPSTREAM_BASE_URL}/responses`);
+  const upstreamUrl = new URL(`${route.baseUrl}/responses`);
   const sendBody = Buffer.from(JSON.stringify(built.requestBody), 'utf8');
   const isStream = built.requestBody.stream === true;
-  const upstreamHeaders = createUpstreamHeaders(upstreamUrl, sendBody, {
+  const upstreamHeaders = createUpstreamHeaders(upstreamUrl, sendBody, route.apiKey, {
     accept: isStream ? 'text/event-stream' : 'application/json',
   });
 
@@ -1089,21 +1232,37 @@ function forwardResponses(req, res, bodyObj) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
+    const body = MULTI_MODE
+      ? {
+          status: 'ok',
+          port: PORT,
+          mode: 'multi',
+          routes: Object.fromEntries(
+            Object.entries(ROUTES).map(([alias, r]) => [
+              alias,
+              { apiFormat: r.apiFormat, baseUrl: r.baseUrl, targetModel: r.targetModel },
+            ]),
+          ),
+          reasoningEffort: MODEL_REASONING_EFFORT,
+          disableResponseStorage: DISABLE_RESPONSE_STORAGE,
+        }
+      : {
+          status: 'ok',
+          port: PORT,
+          mode: 'single',
+          provider: PROVIDER,
+          apiFormat: UPSTREAM_API_FORMAT,
+          upstream: UPSTREAM_BASE_URL,
+          modelRules: MODEL_RULES.map(r => ({
+            match: String(r.match),
+            target: r.target,
+          })),
+          fallback: FALLBACK_MODEL,
+          reasoningEffort: MODEL_REASONING_EFFORT,
+          disableResponseStorage: DISABLE_RESPONSE_STORAGE,
+        };
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok',
-      port: PORT,
-      provider: PROVIDER,
-      apiFormat: UPSTREAM_API_FORMAT,
-      upstream: UPSTREAM_BASE_URL,
-      modelRules: MODEL_RULES.map(r => ({
-        match: String(r.match),
-        target: r.target,
-      })),
-      fallback: FALLBACK_MODEL,
-      reasoningEffort: MODEL_REASONING_EFFORT,
-      disableResponseStorage: DISABLE_RESPONSE_STORAGE,
-    }));
+    res.end(JSON.stringify(body));
     return;
   }
 
@@ -1121,7 +1280,9 @@ const server = http.createServer(async (req, res) => {
     try {
       bodyObj = JSON.parse(rawBody.toString('utf8'));
     } catch (e) {
-      if (UPSTREAM_API_FORMAT === 'anthropic') {
+      // 无法决定路由前必须先解析 body 拿到 model 名（多模式下硬性要求 JSON）
+      // 单上游 anthropic 模式可能透传非 JSON（例如 ping、健康检查），保留原行为
+      if (!MULTI_MODE && UPSTREAM_API_FORMAT === 'anthropic') {
         console.log(`[${formatLogTime()}]`);
         console.log(`  PATH           : ${req.url}`);
         console.log(`  JSON解析失败    : ${e.message}`);
@@ -1133,21 +1294,35 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (UPSTREAM_API_FORMAT === 'responses') {
+  const requestedModel = bodyObj?.model || '';
+  const route = resolveRoute(requestedModel);
+
+  if (!route) {
+    // multi 模式下找不到匹配的别名
+    const validAliases = Object.keys(ROUTES || {});
+    sendProxyError(
+      res,
+      400,
+      `未知模型别名: "${requestedModel}". 可用别名: ${validAliases.join(', ')}`,
+    );
+    return;
+  }
+
+  if (route.apiFormat === 'responses') {
     if (!bodyObj) {
       sendProxyError(res, 400, 'responses mode requires a JSON request body');
       return;
     }
-    forwardResponses(req, res, bodyObj);
+    forwardResponses(req, res, bodyObj, route);
     return;
   }
 
-  if (UPSTREAM_API_FORMAT !== 'anthropic') {
-    sendProxyError(res, 500, `unsupported UPSTREAM_API_FORMAT: ${UPSTREAM_API_FORMAT}`);
+  if (route.apiFormat !== 'anthropic') {
+    sendProxyError(res, 500, `unsupported apiFormat: ${route.apiFormat}`);
     return;
   }
 
-  forwardAnthropic(req, res, rawBody, bodyObj);
+  forwardAnthropic(req, res, rawBody, bodyObj, route);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1167,20 +1342,33 @@ server.on('error', e => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log('\nClaude Desktop local model gateway');
   console.log(`    Claude Desktop → http://127.0.0.1:${PORT}`);
-  console.log(`    Provider       → ${PROVIDER}`);
-  console.log(`    API format     → ${UPSTREAM_API_FORMAT}`);
-  console.log(`    Upstream       → ${UPSTREAM_BASE_URL}`);
-  console.log('');
 
-  if (!UPSTREAM_API_KEY) {
-    console.log('警告：UPSTREAM_API_KEY 为空，请检查 launchd plist 里的 EnvironmentVariables。');
+  if (MULTI_MODE) {
+    console.log('    Mode           → multi (routes.json)');
+    console.log(`    Routes file    → ${ROUTES_PATH}`);
+    console.log(`    Secrets file   → ${SECRETS_PATH}`);
     console.log('');
-  }
+    console.log('    路由表:');
+    for (const [alias, r] of Object.entries(ROUTES)) {
+      console.log(`      ${alias.padEnd(28)} → [${r.apiFormat}] ${r.targetModel} @ ${r.baseUrl}`);
+    }
+  } else {
+    console.log(`    Mode           → single (env)`);
+    console.log(`    Provider       → ${PROVIDER}`);
+    console.log(`    API format     → ${UPSTREAM_API_FORMAT}`);
+    console.log(`    Upstream       → ${UPSTREAM_BASE_URL}`);
+    console.log('');
 
-  console.log('    模型映射规则:');
-  for (const r of MODEL_RULES) {
-    console.log(`      含 ${String(r.match).padEnd(12)}  →  ${r.target}`);
+    if (!UPSTREAM_API_KEY) {
+      console.log('警告：UPSTREAM_API_KEY 为空，请检查 launchd plist 里的 EnvironmentVariables。');
+      console.log('');
+    }
+
+    console.log('    模型映射规则:');
+    for (const r of MODEL_RULES) {
+      console.log(`      含 ${String(r.match).padEnd(12)}  →  ${r.target}`);
+    }
+    console.log(`      其他             →  ${FALLBACK_MODEL}`);
   }
-  console.log(`      其他             →  ${FALLBACK_MODEL}`);
   console.log('');
 });
