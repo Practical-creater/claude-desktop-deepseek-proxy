@@ -78,6 +78,16 @@ const UPSTREAM_API_KEY =
 const MODEL_REASONING_EFFORT = process.env.MODEL_REASONING_EFFORT || 'high';
 const DISABLE_RESPONSE_STORAGE = parseBool(process.env.DISABLE_RESPONSE_STORAGE, true);
 
+const VALID_IMAGE_DETAIL = new Set(['auto', 'low', 'high']);
+const IMAGE_DETAIL = (() => {
+  const raw = (process.env.IMAGE_DETAIL || 'auto').toLowerCase();
+  if (!VALID_IMAGE_DETAIL.has(raw)) {
+    console.error(`[proxy] IMAGE_DETAIL="${raw}" 非法 (允许: auto|low|high)，回退到 "auto"`);
+    return 'auto';
+  }
+  return raw;
+})();
+
 function loadModelRules() {
   if (process.env.MODEL_RULES_JSON) {
     try {
@@ -475,6 +485,30 @@ function isIgnorableAnthropicBlock(block) {
   ].includes(block?.type);
 }
 
+function imageBlockToInputImage(block) {
+  const source = block.source;
+  if (!source || typeof source !== 'object') {
+    throw new Error('image block missing source');
+  }
+
+  let imageUrl;
+  if (source.type === 'base64') {
+    if (!source.media_type || typeof source.data !== 'string') {
+      throw new Error('image base64 source requires media_type and data');
+    }
+    imageUrl = `data:${source.media_type};base64,${source.data}`;
+  } else if (source.type === 'url') {
+    if (typeof source.url !== 'string' || !source.url) {
+      throw new Error('image url source requires a non-empty url');
+    }
+    imageUrl = source.url;
+  } else {
+    throw new Error(`unsupported image source type: ${source.type}`);
+  }
+
+  return { type: 'input_image', image_url: imageUrl, detail: IMAGE_DETAIL };
+}
+
 function convertMessagesToResponsesInput(messages = []) {
   if (!Array.isArray(messages)) {
     throw new Error('messages must be an array');
@@ -497,13 +531,22 @@ function convertMessagesToResponsesInput(messages = []) {
       throw new Error('message content must be a string or an array');
     }
 
-    const textParts = [];
+    const items = [];
 
     for (const block of content) {
       if (!block || typeof block !== 'object') continue;
 
       if (block.type === 'text') {
-        textParts.push(block.text || '');
+        items.push({ type: 'input_text', text: block.text || '' });
+        continue;
+      }
+
+      if (block.type === 'image') {
+        if (message.role !== 'user') {
+          console.error('[proxy] 忽略 assistant 消息中的 image 块');
+          continue;
+        }
+        items.push(imageBlockToInputImage(block));
         continue;
       }
 
@@ -539,12 +582,16 @@ function convertMessagesToResponsesInput(messages = []) {
       throw new Error(`message contains unsupported content block type: ${block.type}`);
     }
 
-    const text = textParts.join('\n');
-    if (text) {
-      input.push({
-        role: message.role,
-        content: text,
-      });
+    if (items.length === 0) continue;
+
+    const allText = items.every(i => i.type === 'input_text');
+    if (allText) {
+      const text = items.map(i => i.text).join('\n');
+      if (text) {
+        input.push({ role: message.role, content: text });
+      }
+    } else {
+      input.push({ role: message.role, content: items });
     }
   }
 
