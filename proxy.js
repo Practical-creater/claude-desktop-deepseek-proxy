@@ -221,7 +221,20 @@ function loadRoutes() {
 
   const secrets = loadSecrets();
   const routes = {};
+  let fallback = null;
+
   for (const [aliasName, def] of Object.entries(raw)) {
+    // _fallback 是特殊键：定义关键字 → 别名映射，处理 Claude Desktop 对
+    // claude-haiku-4-5 这类硬编码名字的探测请求
+    if (aliasName === '_fallback') {
+      if (!def || typeof def !== 'object') {
+        console.error('[proxy] routes.json 的 _fallback 不是对象，忽略');
+        continue;
+      }
+      fallback = def;
+      continue;
+    }
+
     if (!def || typeof def !== 'object') {
       console.error(`[proxy] routes.json 条目 "${aliasName}" 不是对象，跳过`);
       continue;
@@ -247,15 +260,42 @@ function loadRoutes() {
       targetModel,
     };
   }
-  return routes;
+
+  // 验证 _fallback 引用的别名都存在
+  const fallbackEntries = [];
+  if (fallback) {
+    for (const [keyword, aliasName] of Object.entries(fallback)) {
+      if (typeof aliasName !== 'string') continue;
+      if (!routes[aliasName]) {
+        console.error(`[proxy] _fallback["${keyword}"]="${aliasName}" 引用的别名不存在，忽略`);
+        continue;
+      }
+      fallbackEntries.push({ keyword: String(keyword).toLowerCase(), aliasName });
+    }
+  }
+
+  return { routes, fallback: fallbackEntries };
 }
 
-const ROUTES = loadRoutes();
+const _routesData = loadRoutes();
+const ROUTES = _routesData ? _routesData.routes : null;
+const FALLBACK_ENTRIES = _routesData ? _routesData.fallback : [];
 const MULTI_MODE = ROUTES !== null;
 
 function resolveRoute(originalModel) {
   if (MULTI_MODE) {
-    return ROUTES[originalModel] || null;
+    if (ROUTES[originalModel]) return ROUTES[originalModel];
+
+    // Fallback：把 Claude Desktop 探测的 claude-haiku-4-5 / claude-sonnet-4-5 等
+    // 名字映射到用户配置的别名（routes.json 里的 _fallback 段）
+    const lower = originalModel.toLowerCase();
+    for (const { keyword, aliasName } of FALLBACK_ENTRIES) {
+      if (lower.includes(keyword)) {
+        console.log(`[proxy] fallback: "${originalModel}" → "${aliasName}" (匹配关键字 "${keyword}")`);
+        return ROUTES[aliasName];
+      }
+    }
+    return null;
   }
   // 单上游模式：合成一个 route 复用同一套转发逻辑
   return {
@@ -1242,6 +1282,9 @@ const server = http.createServer(async (req, res) => {
               alias,
               { apiFormat: r.apiFormat, baseUrl: r.baseUrl, targetModel: r.targetModel },
             ]),
+          ),
+          fallback: Object.fromEntries(
+            FALLBACK_ENTRIES.map(({ keyword, aliasName }) => [keyword, aliasName]),
           ),
           reasoningEffort: MODEL_REASONING_EFFORT,
           disableResponseStorage: DISABLE_RESPONSE_STORAGE,

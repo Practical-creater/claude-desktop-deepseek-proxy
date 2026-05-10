@@ -224,6 +224,17 @@ if [[ "$MULTI" == "1" ]]; then
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
     "targetModel": "gpt-5.4-mini"
+  },
+
+  // ─────────────────────────────────────────────────────────────────
+  // Fallback：Claude Desktop 启动时会硬编码探测 claude-haiku-4-5、
+  // claude-sonnet-4-5、claude-opus-4-7 等标准名（含版本后缀），不在
+  // 上面别名表里也得有兜底——按关键字 → 别名映射处理
+  // ─────────────────────────────────────────────────────────────────
+  "_fallback": {
+    "haiku":  "claude-gpt-5.4-mini",
+    "sonnet": "claude-gpt-5.4",
+    "opus":   "claude-gpt-5.5"
   }
 }
 ROUTES_EOF
