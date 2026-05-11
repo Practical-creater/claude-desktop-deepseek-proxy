@@ -54,6 +54,12 @@ PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT (msutools.
 3. API Key 字段填任意非空字符串即可，代理完全不读。
 4. 打开模型选择器，应能看到你的全部供应商。
 
+### 可视化后台（无需终端）
+
+安装完成后，浏览器打开 <http://127.0.0.1:3099/admin> 即可可视化编辑
+API key、路由、fallback。保存后立即写入磁盘并**热重载**代理——
+不重启服务、不进终端。
+
 ## 功能特点
 
 - **多供应商路由**——按别名分发到不同上游。

@@ -54,6 +54,12 @@ PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT via msutoo
 3. The API Key field accepts any non‑empty string; the gateway ignores it.
 4. Open the model picker — you should see your providers.
 
+### Admin UI (no terminal needed)
+
+After install, open <http://127.0.0.1:3099/admin> in any browser. You get a
+visual editor for API keys, routes, and fallback rules. Save applies changes
+to disk and **hot‑reloads** the proxy — no service restart, no shell required.
+
 ## Features
 
 - **Multi‑provider routing** — one alias → one upstream, picked per request.

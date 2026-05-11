@@ -308,20 +308,39 @@ function loadRoutes() {
   return { routes, fallback: fallbackEntries };
 }
 
-const _routesData = loadRoutes();
-const ROUTES = _routesData ? _routesData.routes : null;
-const FALLBACK_ENTRIES = _routesData ? _routesData.fallback : [];
-const MULTI_MODE = ROUTES !== null;
-
 // Claude Desktop UI 在某些版本下会吃掉模型名里的 "."，所以查找时归一化：
 // 大小写不敏感、"." 视同 "-"。这样 claude-gpt-5.4 / claude-GPT-5-4 都能命中同一条路由。
 function normalizeAlias(name) {
   return String(name || '').toLowerCase().replace(/\./g, '-');
 }
 
-const NORMALIZED_ROUTES = MULTI_MODE
-  ? Object.fromEntries(Object.entries(ROUTES).map(([k, v]) => [normalizeAlias(k), v]))
-  : null;
+// 路由状态用 let 而非 const，以便 /admin/save 写完文件后热重载
+let ROUTES = null;
+let FALLBACK_ENTRIES = [];
+let MULTI_MODE = false;
+let NORMALIZED_ROUTES = null;
+
+function applyRoutesData(data) {
+  if (!data) {
+    ROUTES = null;
+    FALLBACK_ENTRIES = [];
+    MULTI_MODE = false;
+    NORMALIZED_ROUTES = null;
+    return;
+  }
+  ROUTES = data.routes;
+  FALLBACK_ENTRIES = data.fallback;
+  MULTI_MODE = true;
+  NORMALIZED_ROUTES = Object.fromEntries(
+    Object.entries(ROUTES).map(([k, v]) => [normalizeAlias(k), v]),
+  );
+}
+
+function reloadRouting() {
+  applyRoutesData(loadRoutes());
+}
+
+applyRoutesData(loadRoutes());
 
 function resolveRoute(originalModel) {
   if (MULTI_MODE) {
@@ -1319,6 +1338,577 @@ function forwardResponses(req, res, bodyObj, route) {
 // 用于 /v1/models 响应里的 created_at — 启动时固定一个值
 const SERVER_STARTED_AT = new Date().toISOString();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// /admin 后台（浏览器可视化配置）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 从 secrets.json 拿到"安全版"信息：只返回长度和首尾 4 位字符，不暴露完整 key
+function loadSecretsForAdmin() {
+  if (!fs.existsSync(SECRETS_PATH)) return {};
+  try {
+    const text = fs.readFileSync(SECRETS_PATH, 'utf8');
+    const parsed = parseJsonWithComments(text);
+    const result = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value !== 'string') continue;
+      result[id] = {
+        length: value.length,
+        prefix: value.slice(0, 4),
+        suffix: value.slice(-4),
+      };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+// 把 routes object + fallback 对象序列化成漂亮的 routes.json（含注释头）
+function serializeRoutes(routesObj, fallbackObj) {
+  const header = `{
+  // ─────────────────────────────────────────────────────────────────
+  // 多供应商路由表（由 /admin 可视化界面生成）
+  // 别名 id 必须含 claude/sonnet/opus/haiku/anthropic 任一关键字
+  // ─────────────────────────────────────────────────────────────────
+`;
+  const entries = [];
+  for (const [k, v] of Object.entries(routesObj)) {
+    const val = JSON.stringify(v, null, 4).replace(/\n/g, '\n  ');
+    entries.push(`  ${JSON.stringify(k)}: ${val}`);
+  }
+  if (fallbackObj && Object.keys(fallbackObj).length > 0) {
+    const val = JSON.stringify(fallbackObj, null, 4).replace(/\n/g, '\n  ');
+    entries.push(`  "_fallback": ${val}`);
+  }
+  return header + entries.join(',\n') + '\n}\n';
+}
+
+function writeSecretsAtomic(secretsObj) {
+  fs.writeFileSync(SECRETS_PATH, JSON.stringify(secretsObj, null, 2) + '\n', { mode: 0o600 });
+  // 显式 chmod 防止 fs.writeFileSync 在文件已存在时不应用 mode 参数
+  fs.chmodSync(SECRETS_PATH, 0o600);
+}
+
+function writeRoutesAtomic(routesObj, fallbackObj) {
+  fs.writeFileSync(ROUTES_PATH, serializeRoutes(routesObj, fallbackObj));
+}
+
+function adminJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
+function handleAdminGetConfig(res) {
+  // 把内存里的路由表 + secrets 元数据返给前端，方便初始化表单
+  const routes = {};
+  if (MULTI_MODE) {
+    for (const [alias, r] of Object.entries(ROUTES)) {
+      routes[alias] = {
+        displayName: r.displayName,
+        apiFormat: r.apiFormat,
+        baseUrl: r.baseUrl,
+        secretId: Object.entries(loadSecretsForAdmin())
+          .find(([id]) => loadSecrets()[id] === r.apiKey)?.[0] || '',
+        targetModel: r.targetModel,
+      };
+    }
+  }
+  // 上面 secretId 反查比较绕——重新做一次：直接从磁盘读 routes.json 拿原始 secretId
+  let rawRoutes = {};
+  let fallback = {};
+  if (fs.existsSync(ROUTES_PATH)) {
+    try {
+      const parsed = parseJsonWithComments(fs.readFileSync(ROUTES_PATH, 'utf8'));
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k === '_fallback') {
+          fallback = v || {};
+        } else if (v && typeof v === 'object') {
+          rawRoutes[k] = {
+            displayName: v.displayName || k,
+            apiFormat: v.apiFormat,
+            baseUrl: v.baseUrl,
+            secretId: v.secretId,
+            targetModel: v.targetModel,
+          };
+        }
+      }
+    } catch (e) {
+      return adminJson(res, 500, { error: `routes.json 解析失败: ${e.message}` });
+    }
+  }
+  adminJson(res, 200, {
+    multiMode: MULTI_MODE,
+    routes: rawRoutes,
+    fallback,
+    secrets: loadSecretsForAdmin(),
+  });
+}
+
+const ADMIN_HTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Gateway · Admin</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --border: rgba(0,0,0,0.08);
+    --accent: #0071e3;
+    --accent-hover: #0077ed;
+    --danger: #ff3b30;
+    --success: #34c759;
+    --input-bg: #ffffff;
+    --input-border: #d2d2d7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1c1c1e;
+      --text: #f5f5f7;
+      --muted: #98989d;
+      --border: rgba(255,255,255,0.1);
+      --input-bg: #2c2c2e;
+      --input-border: #3a3a3c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    padding: 32px 16px 96px;
+  }
+  .container { max-width: 720px; margin: 0 auto; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 28px; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -0.02em; }
+  .pill {
+    font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: rgba(52,199,89,0.12); color: var(--success);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .pill::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success);
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 19px; font-weight: 600; margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .card .subtitle { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input, select {
+    width: 100%; padding: 9px 12px; font-size: 14px; font-family: inherit;
+    background: var(--input-bg); color: var(--text);
+    border: 1px solid var(--input-border); border-radius: 8px;
+    outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:focus, select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0,113,227,0.18);
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) {
+    .row, .row-3 { grid-template-columns: 1fr; }
+  }
+  button {
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--accent);
+    transition: background 0.15s, opacity 0.15s;
+  }
+  button:hover { background: rgba(0,113,227,0.08); }
+  button.primary {
+    background: var(--accent); color: white; border-color: var(--accent);
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.danger { color: var(--danger); }
+  button.danger:hover { background: rgba(255,59,48,0.08); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .route {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 12px; background: var(--bg);
+  }
+  .route-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px; gap: 8px;
+  }
+  .route-head strong { font-size: 15px; }
+  .route-head code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--muted);
+    background: var(--card); padding: 2px 8px; border-radius: 6px;
+  }
+  .actions {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: color-mix(in srgb, var(--bg) 95%, transparent);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    padding: 14px 16px; border-top: 1px solid var(--border);
+    display: flex; justify-content: center;
+  }
+  .actions .inner {
+    width: 100%; max-width: 720px;
+    display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+  }
+  #status { font-size: 13px; color: var(--muted); margin-right: auto; }
+  #status.ok { color: var(--success); }
+  #status.err { color: var(--danger); }
+  .add-btn {
+    border: 1px dashed var(--input-border); border-radius: 10px;
+    width: 100%; padding: 12px; color: var(--muted); margin-top: 4px;
+  }
+  .add-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .key-meta {
+    font-size: 12px; color: var(--muted); margin-top: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .empty {
+    text-align: center; color: var(--muted); padding: 24px 0; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Local Gateway</h1>
+    <span class="pill">running on :__PORT__</span>
+  </header>
+
+  <div class="card">
+    <h2>API Keys</h2>
+    <p class="subtitle">Stored in <code>~/.local/model-proxy/secrets.json</code> with permission 600. Leave a field blank to keep the existing key; otherwise the new value replaces it.</p>
+    <div id="secrets"></div>
+  </div>
+
+  <div class="card">
+    <h2>Routes</h2>
+    <p class="subtitle">Each entry maps a model id (with required <code>claude-</code> prefix) to an upstream API. <code>display_name</code> is what Claude Desktop shows in the picker.</p>
+    <div id="routes"></div>
+    <button class="add-btn" id="add-route">+ Add Route</button>
+  </div>
+
+  <div class="card">
+    <h2>Fallback</h2>
+    <p class="subtitle">When Claude Desktop probes a standard name like <code>claude-haiku-4-5</code>, route it to one of your aliases by keyword.</p>
+    <div id="fallback"></div>
+  </div>
+</div>
+
+<div class="actions">
+  <div class="inner">
+    <span id="status"></span>
+    <button id="reload-btn">Reload from Disk</button>
+    <button class="primary" id="save-btn">Save Changes</button>
+  </div>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, attrs = {}, ...children) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return node;
+};
+
+let state = { routes: {}, fallback: {}, secrets: {}, multiMode: false };
+
+async function loadConfig() {
+  const r = await fetch('/admin/config');
+  state = await r.json();
+  if (!state.multiMode) {
+    document.body.innerHTML = '<div class="container"><div class="card"><h2>Single-provider mode</h2><p class="subtitle">This admin UI manages the multi-provider routing table. Your gateway is currently running in single-provider mode (env-based). To enable multi-provider mode, re-run setup.sh with MULTI=1.</p></div></div>';
+    return;
+  }
+  render();
+}
+
+function render() {
+  renderSecrets();
+  renderRoutes();
+  renderFallback();
+}
+
+function renderSecrets() {
+  const root = $('#secrets');
+  root.innerHTML = '';
+  // 收集所有 secrets：现有的 + routes 里引用到但还没建的
+  const ids = new Set(Object.keys(state.secrets));
+  for (const r of Object.values(state.routes)) if (r.secretId) ids.add(r.secretId);
+  if (ids.size === 0) {
+    root.appendChild(el('div', { class: 'empty' }, 'No API keys yet — add a route and reference a new secretId, then enter its key here.'));
+    return;
+  }
+  for (const id of ids) {
+    const meta = state.secrets[id];
+    const placeholder = meta
+      ? \`\${meta.prefix}••••\${meta.suffix}  (\${meta.length} chars)\`
+      : 'paste API key here';
+    const wrap = el('div', { class: 'field' },
+      el('label', {}, id),
+      el('input', { type: 'password', 'data-secret': id, placeholder, autocomplete: 'off' }),
+    );
+    if (meta) {
+      wrap.appendChild(el('div', { class: 'key-meta' }, 'Existing key kept unless you type a new one.'));
+    }
+    root.appendChild(wrap);
+  }
+}
+
+function renderRoutes() {
+  const root = $('#routes');
+  root.innerHTML = '';
+  const entries = Object.entries(state.routes);
+  if (entries.length === 0) {
+    root.appendChild(el('div', { class: 'empty' }, 'No routes yet — click "Add Route" to create one.'));
+    return;
+  }
+  for (const [alias, r] of entries) {
+    root.appendChild(renderRoute(alias, r));
+  }
+}
+
+function renderRoute(alias, r) {
+  const idInput = el('input', { value: alias, placeholder: 'claude-deepseek-v4-pro' });
+  const dnInput = el('input', { value: r.displayName || '', placeholder: 'DeepSeek V4 Pro' });
+  const fmt = el('select', {},
+    new Option('anthropic', 'anthropic', false, r.apiFormat === 'anthropic'),
+    new Option('responses', 'responses', false, r.apiFormat === 'responses'),
+  );
+  const baseInput = el('input', { value: r.baseUrl || '', placeholder: 'https://api.deepseek.com/anthropic' });
+  const sidInput = el('input', { value: r.secretId || '', placeholder: 'deepseek' });
+  const targetInput = el('input', { value: r.targetModel || '', placeholder: 'deepseek-v4-pro' });
+
+  const node = el('div', { class: 'route', 'data-route': '' },
+    el('div', { class: 'route-head' },
+      el('strong', {}, r.displayName || alias),
+      el('code', {}, alias),
+      el('button', { class: 'danger', onclick: () => { node.remove(); collectAndRerenderSecrets(); } }, 'Remove'),
+    ),
+    el('div', { class: 'row' },
+      el('div', { class: 'field' }, el('label', {}, 'Model ID'), idInput),
+      el('div', { class: 'field' }, el('label', {}, 'Display Name'), dnInput),
+    ),
+    el('div', { class: 'row-3' },
+      el('div', { class: 'field' }, el('label', {}, 'Format'), fmt),
+      el('div', { class: 'field' }, el('label', {}, 'Secret ID'), sidInput),
+      el('div', { class: 'field' }, el('label', {}, 'Target Model'), targetInput),
+    ),
+    el('div', { class: 'field' }, el('label', {}, 'Base URL'), baseInput),
+  );
+  node._collect = () => ({
+    alias: idInput.value.trim(),
+    def: {
+      displayName: dnInput.value.trim() || idInput.value.trim(),
+      apiFormat: fmt.value,
+      baseUrl: baseInput.value.trim(),
+      secretId: sidInput.value.trim(),
+      targetModel: targetInput.value.trim(),
+    },
+  });
+  // 触发 secrets 区域刷新（用户改 secretId 后）
+  sidInput.addEventListener('change', collectAndRerenderSecrets);
+  return node;
+}
+
+function collectAndRerenderSecrets() {
+  // 暂时收集当前界面的路由，更新 state.routes，然后只刷新 secrets 区域
+  const tmp = {};
+  for (const node of document.querySelectorAll('[data-route]')) {
+    const { alias, def } = node._collect();
+    if (alias) tmp[alias] = def;
+  }
+  state.routes = tmp;
+  renderSecrets();
+}
+
+function renderFallback() {
+  const root = $('#fallback');
+  root.innerHTML = '';
+  const aliasOptions = Object.keys(state.routes);
+  const placeholder = el('option', { value: '' }, '— none —');
+  for (const kw of ['haiku', 'sonnet', 'opus']) {
+    const sel = el('select', { 'data-fallback': kw });
+    sel.appendChild(placeholder.cloneNode(true));
+    for (const a of aliasOptions) {
+      const opt = new Option(a, a, false, state.fallback[kw] === a);
+      sel.appendChild(opt);
+    }
+    root.appendChild(el('div', { class: 'field' },
+      el('label', {}, \`Claude Desktop sends "\${kw}" probes → route to\`),
+      sel,
+    ));
+  }
+}
+
+$('#add-route').addEventListener('click', () => {
+  // 给个建议默认值，告诉新人 "claude-" 前缀是必要的
+  const newAlias = 'claude-new-model';
+  state.routes[newAlias] = {
+    displayName: 'New Model',
+    apiFormat: 'anthropic',
+    baseUrl: '',
+    secretId: '',
+    targetModel: '',
+  };
+  renderRoutes();
+  renderSecrets();
+});
+
+$('#reload-btn').addEventListener('click', loadConfig);
+
+$('#save-btn').addEventListener('click', async () => {
+  const btn = $('#save-btn');
+  btn.disabled = true;
+  const status = $('#status');
+  status.className = '';
+  status.textContent = 'Saving…';
+
+  // 收集 routes
+  const routes = {};
+  for (const node of document.querySelectorAll('[data-route]')) {
+    const { alias, def } = node._collect();
+    if (!alias) {
+      status.className = 'err'; status.textContent = 'Model ID cannot be empty.';
+      btn.disabled = false; return;
+    }
+    routes[alias] = def;
+  }
+  // 收集 fallback
+  const fallback = {};
+  for (const sel of document.querySelectorAll('[data-fallback]')) {
+    const kw = sel.getAttribute('data-fallback');
+    if (sel.value) fallback[kw] = sel.value;
+  }
+  // 收集 secrets（只发非空字段）
+  const secrets = {};
+  for (const inp of document.querySelectorAll('[data-secret]')) {
+    if (inp.value) secrets[inp.getAttribute('data-secret')] = inp.value;
+  }
+
+  try {
+    const r = await fetch('/admin/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routes, fallback, secrets }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'save failed');
+    status.className = 'ok';
+    status.textContent = \`Saved · \${data.routeCount} routes active\`;
+    setTimeout(() => loadConfig(), 400);
+  } catch (e) {
+    status.className = 'err';
+    status.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+loadConfig();
+</script>
+</body>
+</html>
+`;
+
+function handleAdminSave(res, bodyText) {
+  let payload;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch (e) {
+    return adminJson(res, 400, { error: `请求体不是合法 JSON: ${e.message}` });
+  }
+
+  const { routes, fallback, secrets } = payload || {};
+  if (!routes || typeof routes !== 'object') {
+    return adminJson(res, 400, { error: 'routes 必须是对象' });
+  }
+
+  // 校验每条 route 字段齐全
+  for (const [alias, def] of Object.entries(routes)) {
+    if (!alias || typeof alias !== 'string') {
+      return adminJson(res, 400, { error: '别名 id 不能为空' });
+    }
+    if (!def || typeof def !== 'object') {
+      return adminJson(res, 400, { error: `route "${alias}" 不是对象` });
+    }
+    const required = ['apiFormat', 'baseUrl', 'secretId', 'targetModel'];
+    for (const f of required) {
+      if (!def[f] || typeof def[f] !== 'string') {
+        return adminJson(res, 400, { error: `route "${alias}" 缺字段 ${f}` });
+      }
+    }
+    if (def.apiFormat !== 'anthropic' && def.apiFormat !== 'responses') {
+      return adminJson(res, 400, { error: `route "${alias}" apiFormat 必须是 anthropic 或 responses` });
+    }
+  }
+
+  // 合并 secrets：空字符串 = 保留原值，非空 = 替换
+  const oldSecrets = (() => {
+    if (!fs.existsSync(SECRETS_PATH)) return {};
+    try { return parseJsonWithComments(fs.readFileSync(SECRETS_PATH, 'utf8')); }
+    catch { return {}; }
+  })();
+  const newSecrets = { ...oldSecrets };
+  if (secrets && typeof secrets === 'object') {
+    for (const [id, value] of Object.entries(secrets)) {
+      if (typeof value !== 'string') continue;
+      if (value === '') continue; // 保留原值
+      if (!isValidApiKey(value.trim())) {
+        return adminJson(res, 400, { error: `secret "${id}" 含非可打印 ASCII 字符，已拒绝` });
+      }
+      newSecrets[id] = value.trim();
+    }
+  }
+
+  // 删除 routes 不再引用的 secretId（避免无用的 key 留在磁盘）
+  const usedSecretIds = new Set(Object.values(routes).map(r => r.secretId));
+  for (const id of Object.keys(newSecrets)) {
+    if (!usedSecretIds.has(id)) delete newSecrets[id];
+  }
+
+  // 写文件
+  try {
+    writeSecretsAtomic(newSecrets);
+    writeRoutesAtomic(routes, fallback || {});
+  } catch (e) {
+    return adminJson(res, 500, { error: `写文件失败: ${e.message}` });
+  }
+
+  // 热重载内存里的路由表
+  try {
+    reloadRouting();
+  } catch (e) {
+    return adminJson(res, 500, { error: `热重载失败: ${e.message}` });
+  }
+
+  adminJson(res, 200, { ok: true, routeCount: Object.keys(routes).length });
+}
+
 function buildModelsResponse() {
   if (MULTI_MODE) {
     const data = Object.entries(ROUTES).map(([alias, route]) => ({
@@ -1401,6 +1991,26 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (req.url === '/v1/models' || req.url.startsWith('/v1/models?'))) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(buildModelsResponse()));
+    return;
+  }
+
+  // /admin — 浏览器可视化配置界面
+  if (req.method === 'GET' && req.url === '/admin') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(ADMIN_HTML.replace('__PORT__', String(PORT)));
+    return;
+  }
+  if (req.method === 'GET' && req.url === '/admin/config') {
+    handleAdminGetConfig(res);
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/admin/save') {
+    try {
+      const buf = await readBody(req);
+      handleAdminSave(res, buf.toString('utf8'));
+    } catch (e) {
+      adminJson(res, 400, { error: e.message });
+    }
     return;
   }
 
