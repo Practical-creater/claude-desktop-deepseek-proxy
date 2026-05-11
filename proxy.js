@@ -282,15 +282,30 @@ const ROUTES = _routesData ? _routesData.routes : null;
 const FALLBACK_ENTRIES = _routesData ? _routesData.fallback : [];
 const MULTI_MODE = ROUTES !== null;
 
+// Claude Desktop UI 在某些版本下会吃掉模型名里的 "."，所以查找时归一化：
+// 大小写不敏感、"." 视同 "-"。这样 claude-gpt-5.4 / claude-GPT-5-4 都能命中同一条路由。
+function normalizeAlias(name) {
+  return String(name || '').toLowerCase().replace(/\./g, '-');
+}
+
+const NORMALIZED_ROUTES = MULTI_MODE
+  ? Object.fromEntries(Object.entries(ROUTES).map(([k, v]) => [normalizeAlias(k), v]))
+  : null;
+
 function resolveRoute(originalModel) {
   if (MULTI_MODE) {
     if (ROUTES[originalModel]) return ROUTES[originalModel];
 
+    const normalized = normalizeAlias(originalModel);
+    if (NORMALIZED_ROUTES[normalized]) {
+      console.log(`[proxy] 归一化匹配: "${originalModel}" → 别名 "${normalized}"`);
+      return NORMALIZED_ROUTES[normalized];
+    }
+
     // Fallback：把 Claude Desktop 探测的 claude-haiku-4-5 / claude-sonnet-4-5 等
     // 名字映射到用户配置的别名（routes.json 里的 _fallback 段）
-    const lower = originalModel.toLowerCase();
     for (const { keyword, aliasName } of FALLBACK_ENTRIES) {
-      if (lower.includes(keyword)) {
+      if (normalized.includes(keyword)) {
         console.log(`[proxy] fallback: "${originalModel}" → "${aliasName}" (匹配关键字 "${keyword}")`);
         return ROUTES[aliasName];
       }

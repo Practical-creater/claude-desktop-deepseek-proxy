@@ -199,7 +199,8 @@ if [[ "$MULTI" == "1" ]]; then
   },
 
   // === Mimo ===
-  "claude-mimo-v2.5-pro": {
+  // 注意：键里不要带 "." — Claude Desktop UI 在某些版本下会吃掉小数点
+  "claude-mimo-v2-5-pro": {
     "apiFormat": "anthropic",
     "baseUrl":   "https://token-plan-cn.xiaomimimo.com/anthropic",
     "secretId":  "mimo",
@@ -207,19 +208,19 @@ if [[ "$MULTI" == "1" ]]; then
   },
 
   // === 中转站 (msutools.cn, OpenAI Responses API) ===
-  "claude-gpt-5.5": {
+  "claude-gpt-5-5": {
     "apiFormat": "responses",
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
     "targetModel": "gpt-5.5"
   },
-  "claude-gpt-5.4": {
+  "claude-gpt-5-4": {
     "apiFormat": "responses",
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
     "targetModel": "gpt-5.4"
   },
-  "claude-gpt-5.4-mini": {
+  "claude-gpt-5-4-mini": {
     "apiFormat": "responses",
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
@@ -232,9 +233,9 @@ if [[ "$MULTI" == "1" ]]; then
   // 上面别名表里也得有兜底——按关键字 → 别名映射处理
   // ─────────────────────────────────────────────────────────────────
   "_fallback": {
-    "haiku":  "claude-gpt-5.4-mini",
-    "sonnet": "claude-gpt-5.4",
-    "opus":   "claude-gpt-5.5"
+    "haiku":  "claude-gpt-5-4-mini",
+    "sonnet": "claude-gpt-5-4",
+    "opus":   "claude-gpt-5-5"
   }
 }
 ROUTES_EOF
@@ -384,10 +385,10 @@ if [[ "$MULTI" == "1" ]]; then
   INFERENCE_MODELS_JSON='[
     "claude-deepseek-v4-pro",
     "claude-deepseek-v4-flash",
-    "claude-mimo-v2.5-pro",
-    "claude-gpt-5.5",
-    "claude-gpt-5.4",
-    "claude-gpt-5.4-mini"
+    "claude-mimo-v2-5-pro",
+    "claude-gpt-5-5",
+    "claude-gpt-5-4",
+    "claude-gpt-5-4-mini"
   ]'
 else
   INFERENCE_MODELS_JSON='[
