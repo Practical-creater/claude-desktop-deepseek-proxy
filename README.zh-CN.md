@@ -5,379 +5,136 @@
   <strong>简体中文</strong>
 </p>
 
-这是一个运行在 macOS 本地的小工具，用来让 Claude Desktop Gateway 调用 DeepSeek、MiMo、OpenAI Responses API 风格中转站以及其他模型服务。
+macOS 本地代理，让 Claude Desktop **同时**连多个模型供应商
+（DeepSeek、MiMo、走 msutools.cn 中转的 OpenAI Responses 接口 GPT‑5.x 等），
+并在模型选择器里显示自定义的干净名字。
 
-Claude Desktop Gateway 通常要求使用 Claude 风格的模型名，比如 `claude-haiku-4-5`、`claude-opus-4-7`。但很多第三方模型服务使用自己的模型名。这个项目会在本地运行一个代理，自动把 Claude 模型名转换成对应服务商的模型名。
-
-## 它能做什么
-
-Claude Desktop 只需要连接一个本地地址：
-
-`http://127.0.0.1:3099`
-
-然后本地网关会把请求转发到你选择的服务商：
-
-- DeepSeek
-- MiMo
-- OpenAI Responses API 风格中转站，例如 GPT 5.5 中转站
-- 其他 Anthropic-compatible API
-
-基本流程：
-
-`Claude Desktop -> 本地网关 -> 模型服务商 API`
-
-此外，网关还会清理 system prompt 里的动态 `cch=...` 字段。这个字段可能会导致上游缓存命中率降低，清理后有助于提高缓存复用率。
-
-## 功能特点
-
-- 支持 Claude Desktop Gateway
-- 默认支持 DeepSeek
-- 内置支持 MiMo
-- 内置支持 OpenAI Responses API 风格的 `custom-responses`
-- 支持 Anthropic tools 与 Responses function calling 双向转换
-- 支持自定义 Anthropic-compatible 服务商
-- 自动把 Claude 模型名映射到上游模型名
-- 本地运行，不暴露公网端口
-- 使用 macOS `launchd` 自动启动
-- 打印模型路由和缓存统计日志
-- Claude Desktop 配置简单
-
-## 使用要求
-
-- macOS
-- Claude Desktop
-- Node.js
-- 对应服务商的 API Key
-
-检查 Node.js：
-
-    node --version
-
-如果没有安装 Node.js，安装脚本会尝试通过 Homebrew 安装。
-
-## 文件说明
-
-    model-proxy/
-    ├── proxy.js
-    ├── setup.sh
-    ├── uninstall.sh
-    ├── README.md
-    └── README.zh-CN.md
-
-| 文件 | 说明 |
-|---|---|
-| `proxy.js` | 本地网关核心代码 |
-| `setup.sh` | 安装脚本 |
-| `uninstall.sh` | 卸载脚本 |
-| `README.md` | 英文文档 |
-| `README.zh-CN.md` | 中文文档 |
+```
+Claude Desktop ──► 127.0.0.1:3099 ──► DeepSeek / MiMo / GPT 中转 / ...
+```
 
 ## 快速开始
 
-### 使用 DeepSeek
+> 仅支持 macOS。需要 Node.js（脚本会用 Homebrew 自动装）。
 
-    cd ~/Downloads/model-proxy
-    chmod +x setup.sh uninstall.sh
-    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
+### 多供应商模式（推荐）
 
-### 使用 MiMo
+```bash
+git clone https://github.com/Practical-creater/claude-desktop-local-model-gateway.git
+cd claude-desktop-local-model-gateway
+MULTI=1 bash setup.sh
+```
 
-    cd ~/Downloads/model-proxy
-    chmod +x setup.sh uninstall.sh
-    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
+会依次提示输入三个 API key（输入隐藏）。只用其中一两家也没关系，
+其它家填占位字符串即可——选到没真 key 的模型时上游会返回 401。
 
-### 使用 GPT 5.5 Responses 中转站
+非交互式：
 
-    cd ~/Downloads/model-proxy
-    chmod +x setup.sh uninstall.sh
-    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
+```bash
+MULTI=1 \
+DEEPSEEK_API_KEY=sk-xxx \
+MIMO_API_KEY=sk-xxx \
+MSU_API_KEY=sk-xxx \
+bash setup.sh
+```
 
-安装完成后，需要完全退出并重新打开 Claude Desktop。
+### 单供应商模式（更简单）
 
-请使用：
+```bash
+DEEPSEEK_API_KEY=sk-xxx bash setup.sh                          # DeepSeek
+PROVIDER=mimo            UPSTREAM_API_KEY=sk-xxx bash setup.sh # MiMo
+PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT (msutools.cn)
+```
 
-`菜单栏 Claude -> Quit Claude`
+### 安装完成后
 
-不要只是关闭窗口。
+1. **完全退出** Claude Desktop（`⌘Q`）再重新打开。
+2. 进 **Settings → Identity & Models**，把 *Model list* **清空**——
+   清空后 Claude Desktop 才会调用代理的 `/v1/models` 自动发现接口。
+3. API Key 字段填任意非空字符串即可，代理完全不读。
+4. 打开模型选择器，应能看到你的全部供应商。
 
-## Claude Desktop 应该怎么配置
+## 功能特点
 
-Claude Desktop 永远只需要连接本地网关：
+- **多供应商路由**——按别名分发到不同上游。
+- **自定义显示名**——picker 显示 `DeepSeek V4 Pro`，不是 `claude-deepseek-v4-pro`。
+- **图片输入**——Claude Desktop 上传的图片透传给支持视觉的上游。
+- **密钥存盘不放 plist**——key 在 `secrets.json` 里，权限 `600`。
+- **配置支持注释**——`routes.json` 接受 `//` 与 `/* */`。
+- **坏 key 不再拖垮代理**——加载时校验非 ASCII / 控制字符直接剔除。
+- **向后兼容**——删掉 `routes.json` 自动回退单上游模式。
 
-    http://127.0.0.1:3099
+## 工作原理
 
-不要把服务商地址直接填进 Claude Desktop，例如：
+Claude Desktop gateway 模式要求模型 ID 含
+`claude`/`sonnet`/`opus`/`haiku`/`anthropic`（1.6259.1 起新加的客户端校验）。
+我们用三个手段绕过：
 
-    https://api.deepseek.com/anthropic
-    https://token-plan-cn.xiaomimimo.com/anthropic
+1. 别名 id 加 `claude-` 前缀（如 `claude-deepseek-v4-pro`）通过校验。
+2. `GET /v1/models` 返回独立的 `display_name` 字段，让 picker 显示干净名
+   （`DeepSeek V4 Pro`）。
+3. 转发前把 model 名重写成上游真名（`deepseek-v4-pro`）。
 
-这些地址是本地网关内部使用的，不应该直接填到 Claude Desktop 里。
+代理还会按路由从 `secrets.json` 注入真 API key——所以 Claude Desktop UI 里
+"API Key" 字段的值代理一概忽略。
 
-安装脚本会自动更新这个配置文件：
+## 配置文件
 
-    ~/Library/Application Support/Claude/claude_desktop_config.json
-
-配置内容大致如下：
-
-    {
-      "gateway": {
-        "url": "http://127.0.0.1:3099",
-        "inferenceModels": [
-          "claude-haiku-4-5",
-          "claude-opus-4-7",
-          "claude-sonnet-4-5"
-        ]
-      }
-    }
-
-## Providers
-
-本地网关内置 provider 预设。
-
-| Provider | 上游地址 | 默认模型映射 |
+| 路径 | 用途 | 权限 |
 |---|---|---|
-| `deepseek` | `https://api.deepseek.com/anthropic` | Haiku -> `deepseek-v4-flash`，Opus/Sonnet -> `deepseek-v4-pro` |
-| `mimo` | `https://token-plan-cn.xiaomimimo.com/anthropic` | Haiku/Opus/Sonnet -> `mimo-v2.5-pro` |
-| `custom-responses` | `https://www.msutools.cn/v1` | Haiku -> `gpt-5.4-mini`，Sonnet -> `gpt-5.4`，Opus -> `gpt-5.5` |
+| `~/.local/model-proxy/proxy.js` | 代理本体 | 755 |
+| `~/.local/model-proxy/routes.json` | 别名 → 上游配置（多模式） | 644 |
+| `~/.local/model-proxy/secrets.json` | `secretId → apiKey` 映射 | **600** （强制） |
+| `~/Library/LaunchAgents/com.local.model-proxy.plist` | launchd 服务定义 | 644 |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Claude Desktop gateway URL | 644 |
 
-切换 provider 只需要重新运行安装脚本。
+`routes.json` 示例：
 
-DeepSeek：
+```jsonc
+{
+  "claude-deepseek-v4-pro": {
+    "displayName": "DeepSeek V4 Pro",
+    "apiFormat":   "anthropic",
+    "baseUrl":     "https://api.deepseek.com/anthropic",
+    "secretId":    "deepseek",
+    "targetModel": "deepseek-v4-pro"
+  },
+  // 兜底处理 Claude Desktop 硬编码探测标准 Claude 名字
+  "_fallback": { "haiku": "claude-gpt-5-4", "sonnet": "claude-gpt-5-4", "opus": "claude-gpt-5-5" }
+}
+```
 
-    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
+## 常用操作
 
-MiMo：
+```bash
+# 健康检查 + 路由表
+curl http://127.0.0.1:3099/health | python3 -m json.tool
 
-    PROVIDER=mimo UPSTREAM_API_KEY=tp-your-key bash setup.sh
+# Claude Desktop 看到的模型清单
+curl http://127.0.0.1:3099/v1/models | python3 -m json.tool
 
-GPT 5.5 Responses 中转站：
+# 实时日志 / 错误
+tail -f ~/.local/model-proxy/proxy.log
+tail -f ~/.local/model-proxy/proxy.err
 
-    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
+# 改完 routes/secrets 后重启
+launchctl unload ~/Library/LaunchAgents/com.local.model-proxy.plist
+launchctl load   ~/Library/LaunchAgents/com.local.model-proxy.plist
 
-Claude Desktop 仍然只需要使用同一个本地地址：
+# 完全卸载
+bash uninstall.sh
+```
 
-    http://127.0.0.1:3099
+## 排错速查
 
-## 模型映射
-
-### DeepSeek
-
-| Claude Desktop 模型名包含 | 上游模型 |
-|---|---|
-| `haiku` | `deepseek-v4-flash` |
-| `opus` | `deepseek-v4-pro` |
-| `sonnet` | `deepseek-v4-pro` |
-| 其他 | `deepseek-v4-flash` |
-
-### MiMo
-
-| Claude Desktop 模型名包含 | 上游模型 |
-|---|---|
-| `haiku` | `mimo-v2.5-pro` |
-| `opus` | `mimo-v2.5-pro` |
-| `sonnet` | `mimo-v2.5-pro` |
-| 其他 | `mimo-v2.5-pro` |
-
-### MiMo 1M 上下文
-
-如果你的 MiMo 账号支持 1M 上下文模型，可以在模型名后添加 `[1m]`：
-
-    PROVIDER=mimo \
-    UPSTREAM_API_KEY=tp-your-key \
-    MODEL_RULES_JSON='[
-      {"match":"haiku","target":"mimo-v2.5-pro[1m]"},
-      {"match":"opus","target":"mimo-v2.5-pro[1m]"},
-      {"match":"sonnet","target":"mimo-v2.5-pro[1m]"}
-    ]' \
-    FALLBACK_MODEL='mimo-v2.5-pro[1m]' \
-    bash setup.sh
-
-### GPT 5.5 Responses 中转站
-
-`custom-responses` 使用 OpenAI Responses API 风格，不是 Anthropic-compatible API。代理会把 Claude Desktop 的 Anthropic Messages 请求转换成 Responses 请求，再把 Responses 返回转换回 Claude Desktop 能识别的 Anthropic Messages / SSE。
-
-默认映射：
-
-| Claude Desktop 模型名包含 | 上游模型 |
-|---|---|
-| `haiku` | `gpt-5.4-mini` |
-| `opus` | `gpt-5.5` |
-| `sonnet` | `gpt-5.4` |
-| 其他 | `gpt-5.4-mini` |
-
-使用默认分层映射：
-
-    PROVIDER=custom-responses \
-    UPSTREAM_API_KEY=your-key \
-    bash setup.sh
-
-如果你想让 Claude Desktop 的所有模型都使用 `gpt-5.5`，可以这样覆盖映射：
-
-    PROVIDER=custom-responses \
-    UPSTREAM_API_KEY=your-key \
-    MODEL_RULES_JSON='[
-      {"match":"haiku","target":"gpt-5.5"},
-      {"match":"opus","target":"gpt-5.5"},
-      {"match":"sonnet","target":"gpt-5.5"}
-    ]' \
-    FALLBACK_MODEL='gpt-5.5' \
-    bash setup.sh
-
-工具调用支持范围：
-
-- 支持 Claude Desktop / MCP 常见的 JSON Schema tools
-- 支持 Anthropic `tool_use` / `tool_result` 与 Responses `function_call` / `function_call_output` 转换
-- 支持流式文本和流式工具参数增量
-- 不支持图片、文档、extended thinking、OpenAI 内置 `web_search` / `file_search` / `computer_use` 的语义映射
-
-## 自定义服务商
-
-只要对方提供 Anthropic-compatible API，就可以通过环境变量接入：
-
-    PROVIDER=custom \
-    UPSTREAM_BASE_URL=https://your-provider.example.com/anthropic \
-    UPSTREAM_API_KEY=your-api-key \
-    MODEL_RULES_JSON='[
-      {"match":"haiku","target":"your-fast-model"},
-      {"match":"opus","target":"your-strong-model"},
-      {"match":"sonnet","target":"your-strong-model"}
-    ]' \
-    FALLBACK_MODEL=your-fast-model \
-    bash setup.sh
-
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
+| 现象 | 原因 | 解决 |
 |---|---|---|
-| `PROVIDER` | `deepseek` | provider 预设，支持 `deepseek`、`mimo`、`custom-responses` |
-| `UPSTREAM_API_FORMAT` | provider 预设 | 上游 API 格式，支持 `anthropic` 或 `responses` |
-| `UPSTREAM_API_KEY` | 必填 | 当前服务商的 API Key |
-| `UPSTREAM_BASE_URL` | provider 预设 | 上游 API 地址 |
-| `MODEL_RULES_JSON` | provider 预设 | 自定义模型映射规则 |
-| `FALLBACK_MODEL` | provider 预设 | 没有匹配到规则时使用的模型 |
-| `MODEL_REASONING_EFFORT` | `high` | Responses provider 的 reasoning effort |
-| `DISABLE_RESPONSE_STORAGE` | `true` | Responses provider 是否设置 `store:false` |
-| `PROXY_PORT` | `3099` | 本地网关端口 |
-
-兼容旧变量：
-
-| 变量 | 状态 |
-|---|---|
-| `DEEPSEEK_API_KEY` | 仍可作为 `UPSTREAM_API_KEY` 的 fallback |
-| `DEEPSEEK_BASE_URL` | 仍可作为 `UPSTREAM_BASE_URL` 的 fallback |
-
-## 验证是否成功
-
-健康检查：
-
-    curl http://127.0.0.1:3099/health
-
-查看日志：
-
-    tail -f ~/.local/model-proxy/proxy.log
-
-DeepSeek 正常时，日志中应该能看到：
-
-    收到模型名     : "claude-opus-4-7"
-    转发模型名     : "deepseek-v4-pro"
-
-MiMo 正常时，日志中应该能看到：
-
-    收到模型名     : "claude-opus-4-7"
-    转发模型名     : "mimo-v2.5-pro"
-
-GPT 5.5 Responses 中转站正常时，日志中应该能看到：
-
-    API格式        : responses
-    收到模型名     : "claude-opus-4-7"
-    转发模型名     : "gpt-5.5"
-
-## 常用命令
-
-查看日志：
-
-    tail -f ~/.local/model-proxy/proxy.log
-
-查看错误：
-
-    tail -f ~/.local/model-proxy/proxy.err
-
-重启服务：
-
-    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-    launchctl unload "$PLIST" 2>/dev/null || true
-    launchctl load "$PLIST"
-
-临时停止服务：
-
-    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-    launchctl unload "$PLIST"
-
-重新启动服务：
-
-    PLIST=~/Library/LaunchAgents/com.local.model-proxy.plist
-    launchctl load "$PLIST"
-
-检查脚本语法：
-
-    node --check ~/.local/model-proxy/proxy.js
-
-说明：
-
-- 临时停止只会停掉后台代理进程，不会删除安装文件，也不会恢复 Claude Desktop 的 `gateway` 配置
-- 如果服务停掉了，但 Claude Desktop 仍然指向 `http://127.0.0.1:3099`，Claude Desktop 会连接失败
-- 想恢复使用时，重新执行 `launchctl load "$PLIST"` 即可
-
-## 卸载
-
-    cd ~/Downloads/model-proxy
-    bash uninstall.sh
-
-卸载脚本会：
-
-- 停止本地网关服务
-- 删除 launch agent
-- 删除已安装的代理文件
-- 从 Claude Desktop 配置中移除 `gateway`
-- 备份旧的 Claude Desktop 配置
-
-卸载后请重启 Claude Desktop。
-
-如果卸载后想重新使用，重新运行安装命令即可。
-
-例如 GPT 5.5 Responses 中转站：
-
-    cd ~/Downloads/model-proxy
-    PROVIDER=custom-responses UPSTREAM_API_KEY=your-key bash setup.sh
-
-例如 DeepSeek：
-
-    cd ~/Downloads/model-proxy
-    PROVIDER=deepseek UPSTREAM_API_KEY=sk-your-key bash setup.sh
-
-## 故障排查
-
-| 问题 | 可能原因 | 解决方法 |
-|---|---|---|
-| 没有任何代理日志 | Claude Desktop 没有走本地网关 | 确认 Gateway URL 是 `http://127.0.0.1:3099` |
-| Opus 还是走 flash | 模型映射没有生效 | 查看 `proxy.log` |
-| `401 Unauthorized` | API Key 缺失或错误 | 使用正确的 `UPSTREAM_API_KEY` 重新安装 |
-| MiMo 提示 `Not supported model` | MiMo 模型名不正确 | 使用 `mimo-v2.5-pro` 或 MiMo 官方文档里的真实模型名 |
-| 健康检查显示的 provider 不对 | 当前安装的是旧 provider | 使用目标 provider 重新运行 `setup.sh` |
-| 端口被占用 | `3099` 已被占用 | 使用 `PROXY_PORT=3100` |
-
-## 安全说明
-
-不要提交或分享你的 API Key。
-
-不要分享这些本地文件：
-
-    ~/Library/LaunchAgents/com.local.model-proxy.plist
-    ~/.local/model-proxy/proxy.log
-    ~/.local/model-proxy/proxy.err
-
-它们可能包含本机路径、请求信息或 API Key。
+| picker 是空的 | *Settings → Identity & Models* 里还有 Model list 覆盖了发现 | 把里面条目全部 ✕ 删掉，重启 Claude Desktop |
+| `Server is busy. Retrying…` | `secrets.json` 里某个 key 含非 ASCII 或空白 | 重跑 `MULTI=1 bash setup.sh`，或手编 `secrets.json` |
+| `400 未知模型别名` | 请求的 model 既不在路由表也匹配不上 `_fallback` | 看 `curl .../v1/models` 列表，加条路由或扩 `_fallback` |
+| `403 daily usage limit exceeded` | 上游配额，**不是代理问题** | 切换 provider 或等额度刷新 |
+| GPT 条目在 picker 里坍缩 | Claude Desktop 内置美化器对 `^claude-gpt-数字-数字` 强行美化，无视 `display_name` | 换个不匹配该正则的别名（如 `claude-gpt-mini`） |
 
 ## License
 
-MIT
+MIT — 见 [LICENSE](./LICENSE)。

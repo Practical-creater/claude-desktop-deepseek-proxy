@@ -189,6 +189,18 @@ function parseJsonWithComments(text) {
   return JSON.parse(out);
 }
 
+// HTTP header value 不允许控制字符、换行或非 ASCII。
+// API key 实测都是 printable ASCII，超出范围的几乎必然是误粘贴的提示文本 / 换行污染。
+function isValidApiKey(value) {
+  if (typeof value !== 'string') return false;
+  if (value.length === 0) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) return false;
+  }
+  return true;
+}
+
 function loadSecrets() {
   if (!fs.existsSync(SECRETS_PATH)) return {};
   const stat = fs.statSync(SECRETS_PATH);
@@ -200,12 +212,30 @@ function loadSecrets() {
     process.exit(1);
   }
   const text = fs.readFileSync(SECRETS_PATH, 'utf8');
+  let parsed;
   try {
-    return parseJsonWithComments(text);
+    parsed = parseJsonWithComments(text);
   } catch (e) {
     console.error('[proxy] secrets.json 解析失败:', e.message);
     process.exit(1);
   }
+
+  // 对每个 key 做合法性校验。坏 key 不抛错（避免单一坏 key 拖垮整个代理），
+  // 而是从结果里剔除并打警告——引用该 secretId 的 route 会在 loadRoutes 里失效。
+  const clean = {};
+  for (const [id, value] of Object.entries(parsed)) {
+    const trimmed = typeof value === 'string' ? value.trim() : value;
+    if (!isValidApiKey(trimmed)) {
+      console.error(`[proxy] ⚠️  secrets.json 里 secretId="${id}" 的值无效 (含非可打印 ASCII 或为空)，已忽略`);
+      console.error('[proxy]     最常见原因：交互式 setup 时误把提示文本粘成了 key');
+      continue;
+    }
+    if (trimmed !== value) {
+      console.error(`[proxy] ⚠️  secretId="${id}" 有前后空白，已自动 trim`);
+    }
+    clean[id] = trimmed;
+  }
+  return clean;
 }
 
 function loadRoutes() {
@@ -239,7 +269,7 @@ function loadRoutes() {
       console.error(`[proxy] routes.json 条目 "${aliasName}" 不是对象，跳过`);
       continue;
     }
-    const { apiFormat, baseUrl, secretId, targetModel } = def;
+    const { apiFormat, baseUrl, secretId, targetModel, displayName } = def;
     if (!apiFormat || !baseUrl || !secretId || !targetModel) {
       console.error(`[proxy] routes.json 条目 "${aliasName}" 缺字段，需要 apiFormat/baseUrl/secretId/targetModel`);
       continue;
@@ -258,6 +288,7 @@ function loadRoutes() {
       baseUrl: String(baseUrl).replace(/\/$/, ''),
       apiKey,
       targetModel,
+      displayName: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : aliasName,
     };
   }
 
@@ -1285,6 +1316,47 @@ function forwardResponses(req, res, bodyObj, route) {
 // HTTP 服务器
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 用于 /v1/models 响应里的 created_at — 启动时固定一个值
+const SERVER_STARTED_AT = new Date().toISOString();
+
+function buildModelsResponse() {
+  if (MULTI_MODE) {
+    const data = Object.entries(ROUTES).map(([alias, route]) => ({
+      type: 'model',
+      id: alias,
+      display_name: route.displayName,
+      created_at: SERVER_STARTED_AT,
+    }));
+    return {
+      data,
+      first_id: data[0]?.id || null,
+      last_id: data[data.length - 1]?.id || null,
+      has_more: false,
+    };
+  }
+
+  // 单上游模式：以 MODEL_RULES 的 target 反推出来 id（不太好看，但单模式本来就靠 env 配置）
+  const seen = new Set();
+  const data = [];
+  for (const rule of MODEL_RULES) {
+    const id = rule.target;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    data.push({
+      type: 'model',
+      id,
+      display_name: id,
+      created_at: SERVER_STARTED_AT,
+    });
+  }
+  return {
+    data,
+    first_id: data[0]?.id || null,
+    last_id: data[data.length - 1]?.id || null,
+    has_more: false,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     const body = MULTI_MODE
@@ -1321,6 +1393,14 @@ const server = http.createServer(async (req, res) => {
         };
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
+    return;
+  }
+
+  // /v1/models — 给 Claude Desktop 自动发现模型用，按 Anthropic 标准格式返回
+  // 客户端通过 display_name 字段拿到 picker 显示名，跟 id 解耦
+  if (req.method === 'GET' && (req.url === '/v1/models' || req.url.startsWith('/v1/models?'))) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(buildModelsResponse()));
     return;
   }
 

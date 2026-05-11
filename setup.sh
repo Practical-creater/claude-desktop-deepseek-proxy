@@ -107,6 +107,16 @@ ok "必要文件存在"
 if [[ "$MULTI" == "1" ]]; then
   header "步骤 1 / 6  读取多供应商 API Keys"
 
+  # API key 必须是非空、全 printable ASCII。任何中文/换行/控制字符都会让
+  # 上游请求的 Authorization header 抛 ERR_INVALID_CHAR，导致代理崩溃。
+  validate_key() {
+    local name="$1" value="$2"
+    [[ -z "$value" ]] && die "$name 不能为空"
+    if [[ "$value" =~ [^[:print:]] ]]; then
+      die "$name 含非可打印字符（可能误粘贴了提示文本或换行）"
+    fi
+  }
+
   if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
     read -rsp "请粘贴 DeepSeek API Key（输入不显示）: " DEEPSEEK_API_KEY
     echo
@@ -120,11 +130,11 @@ if [[ "$MULTI" == "1" ]]; then
     echo
   fi
 
-  [[ -z "$DEEPSEEK_API_KEY" ]] && die "DEEPSEEK_API_KEY 不能为空"
-  [[ -z "$MIMO_API_KEY" ]]     && die "MIMO_API_KEY 不能为空"
-  [[ -z "$MSU_API_KEY" ]]      && die "MSU_API_KEY 不能为空"
+  validate_key "DEEPSEEK_API_KEY" "$DEEPSEEK_API_KEY"
+  validate_key "MIMO_API_KEY"     "$MIMO_API_KEY"
+  validate_key "MSU_API_KEY"      "$MSU_API_KEY"
 
-  ok "三个 API Key 已读取"
+  ok "三个 API Key 已读取且格式合法"
 else
   header "步骤 1 / 6  读取 ${PROVIDER} API Key"
 
@@ -176,22 +186,29 @@ if [[ "$MULTI" == "1" ]]; then
 {
   // ─────────────────────────────────────────────────────────────────
   // 多供应商路由表
-  // 格式：别名 → { apiFormat, baseUrl, secretId, targetModel }
+  // 格式：别名 (id) → {
+  //   apiFormat, baseUrl, secretId, targetModel,
+  //   displayName  // 可选：Claude Desktop picker 里显示的名字
+  // }
   //
-  // - 别名必须包含 "claude/sonnet/opus/haiku/anthropic" 任一关键字才能
-  //   通过 Claude Desktop 1.6259.1+ 的客户端校验
+  // 字段说明：
+  // - 别名 id 必须含 "claude/sonnet/opus/haiku/anthropic" 关键字（Claude
+  //   Desktop 1.6259.1+ 客户端校验）；id 用横杠，不要小数点
+  // - targetModel 用真实上游名（可带小数点）
+  // - displayName 是 picker 里展示给用户的文字；空着的话退回到 id
   // - apiFormat: "anthropic" 或 "responses"
-  // - secretId 引用 secrets.json 里的 key
   // ─────────────────────────────────────────────────────────────────
 
   // === DeepSeek ===
   "claude-deepseek-v4-pro": {
+    "displayName": "DeepSeek V4 Pro",
     "apiFormat": "anthropic",
     "baseUrl":   "https://api.deepseek.com/anthropic",
     "secretId":  "deepseek",
     "targetModel": "deepseek-v4-pro"
   },
   "claude-deepseek-v4-flash": {
+    "displayName": "DeepSeek V4 Flash",
     "apiFormat": "anthropic",
     "baseUrl":   "https://api.deepseek.com/anthropic",
     "secretId":  "deepseek",
@@ -199,8 +216,8 @@ if [[ "$MULTI" == "1" ]]; then
   },
 
   // === Mimo ===
-  // 注意：键里不要带 "." — Claude Desktop UI 在某些版本下会吃掉小数点
   "claude-mimo-v2-5-pro": {
+    "displayName": "Mimo V2.5 Pro",
     "apiFormat": "anthropic",
     "baseUrl":   "https://token-plan-cn.xiaomimimo.com/anthropic",
     "secretId":  "mimo",
@@ -209,23 +226,22 @@ if [[ "$MULTI" == "1" ]]; then
 
   // === 中转站 (msutools.cn, OpenAI Responses API) ===
   "claude-gpt-5-5": {
+    "displayName": "GPT 5.5",
     "apiFormat": "responses",
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
     "targetModel": "gpt-5.5"
   },
   "claude-gpt-5-4": {
+    "displayName": "GPT 5.4",
     "apiFormat": "responses",
     "baseUrl":   "https://www.msutools.cn/v1",
     "secretId":  "msu",
     "targetModel": "gpt-5.4"
   },
-  "claude-gpt-5-4-mini": {
-    "apiFormat": "responses",
-    "baseUrl":   "https://www.msutools.cn/v1",
-    "secretId":  "msu",
-    "targetModel": "gpt-5.4-mini"
-  },
+  // 注：gpt-5.4-mini 跟 5.4 在中转站同价，且 Claude Desktop 会把
+  // claude-gpt-5-4-mini 误美化成 "Gpt 5.4" 跟 5.4 撞名，所以不暴露
+  // mini。需要时可以加 displayName 用 claude-mini-pro 这类逃逸名字。
 
   // ─────────────────────────────────────────────────────────────────
   // Fallback：Claude Desktop 启动时会硬编码探测 claude-haiku-4-5、
@@ -233,7 +249,7 @@ if [[ "$MULTI" == "1" ]]; then
   // 上面别名表里也得有兜底——按关键字 → 别名映射处理
   // ─────────────────────────────────────────────────────────────────
   "_fallback": {
-    "haiku":  "claude-gpt-5-4-mini",
+    "haiku":  "claude-gpt-5-4",
     "sonnet": "claude-gpt-5-4",
     "opus":   "claude-gpt-5-5"
   }
@@ -382,14 +398,9 @@ if [[ -f "$CLAUDE_CONFIG" ]]; then
 fi
 
 if [[ "$MULTI" == "1" ]]; then
-  INFERENCE_MODELS_JSON='[
-    "claude-deepseek-v4-pro",
-    "claude-deepseek-v4-flash",
-    "claude-mimo-v2-5-pro",
-    "claude-gpt-5-5",
-    "claude-gpt-5-4",
-    "claude-gpt-5-4-mini"
-  ]'
+  # 多模式：不写 inferenceModels，让 Claude Desktop 走 /v1/models 自动发现
+  # 这样 displayName 才能生效，picker 才能显示成 "DeepSeek V4 Pro" 这种自定义名
+  INFERENCE_MODELS_JSON='[]'
 else
   INFERENCE_MODELS_JSON='[
     "claude-haiku-4-5",
@@ -415,10 +426,11 @@ try {
   cfg = {};
 }
 
-cfg.gateway = {
-  url: `http://127.0.0.1:${port}`,
-  inferenceModels,
-};
+cfg.gateway = { url: `http://127.0.0.1:${port}` };
+if (inferenceModels.length > 0) {
+  // 显式写死时（单上游模式）才设 inferenceModels；空数组等同于走 /v1/models 自动发现
+  cfg.gateway.inferenceModels = inferenceModels;
+}
 
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n');
 NODE_EOF
