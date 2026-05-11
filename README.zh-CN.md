@@ -25,20 +25,19 @@ cd claude-desktop-local-model-gateway
 MULTI=1 bash setup.sh
 ```
 
-会依次提示输入三个 API key（输入隐藏）。只用其中一两家也没关系，
-其它家填占位字符串即可——选到没真 key 的模型时上游会返回 401。
+脚本会装好代理 + 启动后台服务，并生成一份**空白**的路由表——
+不在终端问任何 API key，也不预置任何供应商。剩下的配置全在浏览器里完成：
 
-非交互式：
+1. 浏览器打开 <http://127.0.0.1:3099/admin>
+2. 在 **Routes** 卡片点 **+ Add Route**，为每个供应商加一条（参考下面的 [示例路由](#示例路由)）
+3. 在 **API Keys** 区域粘贴对应的 API key
+4. 点 **Save Changes**
+5. 完全退出 Claude Desktop（`⌘Q`）再重新打开，picker 里就能看到新模型
 
-```bash
-MULTI=1 \
-DEEPSEEK_API_KEY=sk-xxx \
-MIMO_API_KEY=sk-xxx \
-MSU_API_KEY=sk-xxx \
-bash setup.sh
-```
+重跑 `bash setup.sh` 是安全的：已有的 `routes.json` 和 `secrets.json` 会保留，
+你在 `/admin` 里的修改不会被覆盖。
 
-### 单供应商模式（更简单）
+### 单供应商模式（legacy，更简单）
 
 ```bash
 DEEPSEEK_API_KEY=sk-xxx bash setup.sh                          # DeepSeek
@@ -46,19 +45,32 @@ PROVIDER=mimo            UPSTREAM_API_KEY=sk-xxx bash setup.sh # MiMo
 PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT (msutools.cn)
 ```
 
-### 安装完成后
+picker 里显示三个标准 Claude 名字（`claude-haiku-4-5` 等），统一转发到那个上游。
+
+### 安装完成后（Claude Desktop 侧）
 
 1. **完全退出** Claude Desktop（`⌘Q`）再重新打开。
 2. 进 **Settings → Identity & Models**，把 *Model list* **清空**——
    清空后 Claude Desktop 才会调用代理的 `/v1/models` 自动发现接口。
 3. API Key 字段填任意非空字符串即可，代理完全不读。
-4. 打开模型选择器，应能看到你的全部供应商。
 
-### 可视化后台（无需终端）
+## 示例路由
 
-安装完成后，浏览器打开 <http://127.0.0.1:3099/admin> 即可可视化编辑
-API key、路由、fallback。保存后立即写入磁盘并**热重载**代理——
-不重启服务、不进终端。
+在 `/admin` 的 **+ Add Route** 里填这些值。`Target Model` 是真实上游模型名，
+`secretId` 只是一个标签，指向你在 **API Keys** 区域粘贴的 key。
+
+| Display Name | Model ID | Format | Base URL | Secret ID | Target Model |
+|---|---|---|---|---|---|
+| DeepSeek V4 Pro | `claude-deepseek-v4-pro` | anthropic | `https://api.deepseek.com/anthropic` | `deepseek` | `deepseek-v4-pro` |
+| MiMo V2.5 Pro | `claude-mimo-v2-5-pro` | anthropic | `https://token-plan-cn.xiaomimimo.com/anthropic` | `mimo` | `mimo-v2.5-pro` |
+| GPT 5.5 | `claude-gpt-5-5` | responses | `https://www.msutools.cn/v1` | `msu` | `gpt-5.5` |
+
+Model ID **必须含** `claude` / `sonnet` / `opus` / `haiku` / `anthropic`
+任一关键字，否则过不了 Claude Desktop 的 gateway 校验。ID 里**用横杠不用小数点**
+（小数点会被部分 Claude Desktop 版本吃掉）。
+
+Claude Desktop 启动时硬编码探测的 `claude-haiku-4-5` 等标准名，在 `/admin`
+的 *Fallback* 卡片里把对应关键字指向你的别名即可兜底。
 
 ## 功能特点
 

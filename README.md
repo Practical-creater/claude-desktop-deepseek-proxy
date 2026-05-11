@@ -25,20 +25,19 @@ cd claude-desktop-local-model-gateway
 MULTI=1 bash setup.sh
 ```
 
-You will be asked for three API keys (input hidden). If you only use one or two,
-type any placeholder for the others — the failing routes just return 401 when picked.
+That installs the proxy with an **empty** route table — no terminal prompts,
+no hardcoded providers. Configure everything from the browser:
 
-Non‑interactive:
+1. Open <http://127.0.0.1:3099/admin>
+2. Click **+ Add Route** for each provider (see [Example routes](#example-routes))
+3. Paste API keys in the **API Keys** section
+4. Click **Save Changes**
+5. Fully quit Claude Desktop (`⌘Q`) and reopen — the new models appear in the picker
 
-```bash
-MULTI=1 \
-DEEPSEEK_API_KEY=sk-xxx \
-MIMO_API_KEY=sk-xxx \
-MSU_API_KEY=sk-xxx \
-bash setup.sh
-```
+Re‑running `bash setup.sh` is safe: existing `routes.json` and `secrets.json`
+are preserved so your `/admin` edits survive reinstall.
 
-### Single‑provider mode (simple)
+### Single‑provider mode (legacy, simpler)
 
 ```bash
 DEEPSEEK_API_KEY=sk-xxx bash setup.sh                          # DeepSeek
@@ -46,19 +45,34 @@ PROVIDER=mimo            UPSTREAM_API_KEY=sk-xxx bash setup.sh # MiMo
 PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT via msutools.cn
 ```
 
-### After install
+The picker shows the three standard Claude names (`claude-haiku-4-5`, etc.) and
+they all forward to the configured upstream.
+
+### After install — Claude Desktop side
 
 1. **Fully quit** Claude Desktop (`⌘Q`), then reopen.
 2. In **Settings → Identity & Models**, make sure the *Model list* is **empty** —
    that triggers `/v1/models` discovery from the gateway.
 3. The API Key field accepts any non‑empty string; the gateway ignores it.
-4. Open the model picker — you should see your providers.
 
-### Admin UI (no terminal needed)
+## Example routes
 
-After install, open <http://127.0.0.1:3099/admin> in any browser. You get a
-visual editor for API keys, routes, and fallback rules. Save applies changes
-to disk and **hot‑reloads** the proxy — no service restart, no shell required.
+Paste these in **+ Add Route** in `/admin`. Real upstream model names go in
+*Target Model*; `secretId` is just a label pointing to a key you'll paste in
+the **API Keys** section.
+
+| Display Name | Model ID | Format | Base URL | Secret ID | Target Model |
+|---|---|---|---|---|---|
+| DeepSeek V4 Pro | `claude-deepseek-v4-pro` | anthropic | `https://api.deepseek.com/anthropic` | `deepseek` | `deepseek-v4-pro` |
+| MiMo V2.5 Pro | `claude-mimo-v2-5-pro` | anthropic | `https://token-plan-cn.xiaomimimo.com/anthropic` | `mimo` | `mimo-v2.5-pro` |
+| GPT 5.5 | `claude-gpt-5-5` | responses | `https://www.msutools.cn/v1` | `msu` | `gpt-5.5` |
+
+Model IDs **must contain** `claude` / `sonnet` / `opus` / `haiku` / `anthropic`
+to pass Claude Desktop's gateway validation. Use dashes, not dots, in the ID
+(dots get stripped by some Claude Desktop UI versions).
+
+For Claude Desktop's built‑in probes (`claude-haiku-4-5` etc.), set the *Fallback*
+keywords in `/admin` to one of your aliases.
 
 ## Features
 

@@ -105,36 +105,9 @@ header "步骤 0 / 6  检查文件"
 ok "必要文件存在"
 
 if [[ "$MULTI" == "1" ]]; then
-  header "步骤 1 / 6  读取多供应商 API Keys"
-
-  # API key 必须是非空、全 printable ASCII。任何中文/换行/控制字符都会让
-  # 上游请求的 Authorization header 抛 ERR_INVALID_CHAR，导致代理崩溃。
-  validate_key() {
-    local name="$1" value="$2"
-    [[ -z "$value" ]] && die "$name 不能为空"
-    if [[ "$value" =~ [^[:print:]] ]]; then
-      die "$name 含非可打印字符（可能误粘贴了提示文本或换行）"
-    fi
-  }
-
-  if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
-    read -rsp "请粘贴 DeepSeek API Key（输入不显示）: " DEEPSEEK_API_KEY
-    echo
-  fi
-  if [[ -z "${MIMO_API_KEY:-}" ]]; then
-    read -rsp "请粘贴 Mimo API Key（输入不显示）: " MIMO_API_KEY
-    echo
-  fi
-  if [[ -z "${MSU_API_KEY:-}" ]]; then
-    read -rsp "请粘贴 中转站 (msutools.cn) API Key（输入不显示）: " MSU_API_KEY
-    echo
-  fi
-
-  validate_key "DEEPSEEK_API_KEY" "$DEEPSEEK_API_KEY"
-  validate_key "MIMO_API_KEY"     "$MIMO_API_KEY"
-  validate_key "MSU_API_KEY"      "$MSU_API_KEY"
-
-  ok "三个 API Key 已读取且格式合法"
+  header "步骤 1 / 6  多供应商模式（配置走 /admin 后台）"
+  info "多供应商模式不再在终端要求 API Key，安装完成后请在浏览器打开 http://127.0.0.1:${PROXY_PORT}/admin 添加路由和密钥"
+  ok "跳过 API Key 输入"
 else
   header "步骤 1 / 6  读取 ${PROVIDER} API Key"
 
@@ -182,89 +155,43 @@ if [[ "$MULTI" == "1" ]]; then
   ROUTES_PATH="$PROXY_DIR/routes.json"
   SECRETS_PATH="$PROXY_DIR/secrets.json"
 
-  cat > "$ROUTES_PATH" <<'ROUTES_EOF'
+  # 幂等：已存在的 routes.json 不覆盖，保护用户在 /admin 里改过的配置
+  if [[ -f "$ROUTES_PATH" ]]; then
+    info "routes.json 已存在，保留当前内容（用 /admin 修改）"
+  else
+    cat > "$ROUTES_PATH" <<'ROUTES_EOF'
 {
   // ─────────────────────────────────────────────────────────────────
-  // 多供应商路由表
-  // 格式：别名 (id) → {
-  //   apiFormat, baseUrl, secretId, targetModel,
-  //   displayName  // 可选：Claude Desktop picker 里显示的名字
+  // 多供应商路由表 — 在浏览器打开 http://127.0.0.1:3099/admin 添加路由
+  //
+  // 别名 (id) → {
+  //   displayName, apiFormat ("anthropic"|"responses"),
+  //   baseUrl, secretId, targetModel
   // }
   //
-  // 字段说明：
-  // - 别名 id 必须含 "claude/sonnet/opus/haiku/anthropic" 关键字（Claude
-  //   Desktop 1.6259.1+ 客户端校验）；id 用横杠，不要小数点
+  // 注意：
+  // - id 必须含 "claude/sonnet/opus/haiku/anthropic" 关键字
+  // - id 用横杠不用小数点
   // - targetModel 用真实上游名（可带小数点）
-  // - displayName 是 picker 里展示给用户的文字；空着的话退回到 id
-  // - apiFormat: "anthropic" 或 "responses"
+  // - _fallback 是兜底：Claude Desktop 启动会硬编码探测 claude-haiku-4-5
+  //   等标准名，命中关键字就路由到指定别名
   // ─────────────────────────────────────────────────────────────────
 
-  // === DeepSeek ===
-  "claude-deepseek-v4-pro": {
-    "displayName": "DeepSeek V4 Pro",
-    "apiFormat": "anthropic",
-    "baseUrl":   "https://api.deepseek.com/anthropic",
-    "secretId":  "deepseek",
-    "targetModel": "deepseek-v4-pro"
-  },
-  "claude-deepseek-v4-flash": {
-    "displayName": "DeepSeek V4 Flash",
-    "apiFormat": "anthropic",
-    "baseUrl":   "https://api.deepseek.com/anthropic",
-    "secretId":  "deepseek",
-    "targetModel": "deepseek-v4-flash"
-  },
-
-  // === Mimo ===
-  "claude-mimo-v2-5-pro": {
-    "displayName": "Mimo V2.5 Pro",
-    "apiFormat": "anthropic",
-    "baseUrl":   "https://token-plan-cn.xiaomimimo.com/anthropic",
-    "secretId":  "mimo",
-    "targetModel": "mimo-v2.5-pro"
-  },
-
-  // === 中转站 (msutools.cn, OpenAI Responses API) ===
-  "claude-gpt-5-5": {
-    "displayName": "GPT 5.5",
-    "apiFormat": "responses",
-    "baseUrl":   "https://www.msutools.cn/v1",
-    "secretId":  "msu",
-    "targetModel": "gpt-5.5"
-  },
-  "claude-gpt-5-4": {
-    "displayName": "GPT 5.4",
-    "apiFormat": "responses",
-    "baseUrl":   "https://www.msutools.cn/v1",
-    "secretId":  "msu",
-    "targetModel": "gpt-5.4"
-  },
-  // 注：gpt-5.4-mini 跟 5.4 在中转站同价，且 Claude Desktop 会把
-  // claude-gpt-5-4-mini 误美化成 "Gpt 5.4" 跟 5.4 撞名，所以不暴露
-  // mini。需要时可以加 displayName 用 claude-mini-pro 这类逃逸名字。
-
-  // ─────────────────────────────────────────────────────────────────
-  // Fallback：Claude Desktop 启动时会硬编码探测 claude-haiku-4-5、
-  // claude-sonnet-4-5、claude-opus-4-7 等标准名（含版本后缀），不在
-  // 上面别名表里也得有兜底——按关键字 → 别名映射处理
-  // ─────────────────────────────────────────────────────────────────
-  "_fallback": {
-    "haiku":  "claude-gpt-5-4",
-    "sonnet": "claude-gpt-5-4",
-    "opus":   "claude-gpt-5-5"
-  }
+  "_fallback": {}
 }
 ROUTES_EOF
-  ok "routes.json 已写入 $ROUTES_PATH"
+    ok "已创建空白 routes.json，去 /admin 添加路由"
+  fi
 
-  # 用 node 写 secrets.json，避免在 shell 里 escape JSON 字符串
-  node - "$SECRETS_PATH" "$DEEPSEEK_API_KEY" "$MIMO_API_KEY" "$MSU_API_KEY" <<'NODE_EOF'
-const fs = require('fs');
-const [, , out, deepseek, mimo, msu] = process.argv;
-fs.writeFileSync(out, JSON.stringify({ deepseek, mimo, msu }, null, 2) + '\n', { mode: 0o600 });
-NODE_EOF
-  chmod 600 "$SECRETS_PATH"
-  ok "secrets.json 已写入 $SECRETS_PATH (chmod 600)"
+  # 同样幂等：已存在的 secrets.json 不覆盖
+  if [[ -f "$SECRETS_PATH" ]]; then
+    info "secrets.json 已存在，保留当前内容（用 /admin 修改）"
+    chmod 600 "$SECRETS_PATH"
+  else
+    echo '{}' > "$SECRETS_PATH"
+    chmod 600 "$SECRETS_PATH"
+    ok "已创建空白 secrets.json (chmod 600)"
+  fi
 fi
 
 header "步骤 4 / 6  创建 launchd 服务"
@@ -439,23 +366,30 @@ ok "Claude Desktop 配置已更新: $CLAUDE_CONFIG"
 
 echo
 echo -e "${GREEN}${BOLD}安装完成！${NC}"
+echo
 if [[ "$MULTI" == "1" ]]; then
-  echo "  模式: 多供应商 (routes.json)"
+  echo "  模式: 多供应商"
   echo "  路由文件: ${PROXY_DIR}/routes.json"
   echo "  密钥文件: ${PROXY_DIR}/secrets.json (chmod 600)"
+  echo
+  echo "下一步："
+  echo "  1. 浏览器打开 ${BOLD}http://127.0.0.1:${PROXY_PORT}/admin${NC}"
+  echo "  2. 在 'Routes' 卡片点 '+ Add Route' 添加供应商，填好 API key"
+  echo "  3. 点 Save Changes"
+  echo "  4. 完全退出 Claude Desktop (⌘Q) 再重新打开，picker 里就能看到新模型"
 else
-  echo "  当前 Provider: ${PROVIDER}"
+  echo "  模式: 单供应商"
+  echo "  Provider: ${PROVIDER}"
   echo "  API 格式: ${UPSTREAM_API_FORMAT}"
   echo "  上游地址: ${UPSTREAM_BASE_URL}"
+  echo
+  echo "下一步："
+  echo "  1. 完全退出 Claude Desktop (⌘Q) 再重新打开"
+  echo "  2. picker 里能看到 claude-haiku-4-5 / claude-opus-4-7 / claude-sonnet-4-5"
 fi
 echo
-echo "下一步："
-echo "  1. 完全退出 Claude Desktop，不是只关窗口"
-echo "  2. 重新打开 Claude Desktop"
-echo "  3. 确认 Gateway base URL 是 http://127.0.0.1:${PROXY_PORT}"
-echo "  4. 测试 Haiku / Opus 模型"
-echo
 echo "常用命令："
+echo "  打开后台：   open http://127.0.0.1:${PROXY_PORT}/admin"
 echo "  查看日志：   tail -f ${PROXY_DIR}/proxy.log"
 echo "  查看错误：   tail -f ${PROXY_DIR}/proxy.err"
 echo "  健康检查：   curl http://127.0.0.1:${PROXY_PORT}/health"
