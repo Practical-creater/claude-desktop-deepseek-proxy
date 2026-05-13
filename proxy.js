@@ -204,12 +204,13 @@ function isValidApiKey(value) {
 function loadSecrets() {
   if (!fs.existsSync(SECRETS_PATH)) return {};
   const stat = fs.statSync(SECRETS_PATH);
-  // 强制 600 权限，否则拒绝加载（保护 API key）
-  const mode = stat.mode & 0o777;
-  if (mode !== 0o600) {
-    console.error(`[proxy] secrets.json 权限不安全 (mode=${mode.toString(8)})，应为 600`);
-    console.error(`[proxy] 修复: chmod 600 "${SECRETS_PATH}"`);
-    process.exit(1);
+  if (process.platform !== 'win32') {
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o600) {
+      console.error(`[proxy] secrets.json 权限不安全 (mode=${mode.toString(8)})，应为 600`);
+      console.error(`[proxy] 修复: chmod 600 "${SECRETS_PATH}"`);
+      process.exit(1);
+    }
   }
   const text = fs.readFileSync(SECRETS_PATH, 'utf8');
   let parsed;

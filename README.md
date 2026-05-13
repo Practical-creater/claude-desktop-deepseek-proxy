@@ -5,7 +5,7 @@
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-A local macOS proxy that lets Claude Desktop talk to **multiple** model providers
+A local proxy for Claude Desktop on macOS and Windows that lets Claude Desktop talk to **multiple** model providers
 (DeepSeek, MiMo, OpenAI Responses gateways like GPT‑5.x via msutools.cn, etc.)
 at the same time, with custom display names in the model picker.
 
@@ -15,9 +15,11 @@ Claude Desktop ──► 127.0.0.1:3099 ──► DeepSeek / MiMo / GPT gateway 
 
 ## Quick Start
 
-> macOS only. Requires Node.js (the installer will offer to install it via Homebrew).
+> Requires Node.js. On macOS the installer can install it via Homebrew; on Windows install the Node.js LTS MSI first.
 
 ### Multi‑provider mode (recommended)
+
+#### macOS
 
 ```bash
 git clone https://github.com/Practical-creater/claude-desktop-local-model-gateway.git
@@ -37,7 +39,27 @@ no hardcoded providers. Configure everything from the browser:
 Re‑running `bash setup.sh` is safe: existing `routes.json` and `secrets.json`
 are preserved so your `/admin` edits survive reinstall.
 
+#### Windows
+
+```powershell
+git clone https://github.com/Practical-creater/claude-desktop-local-model-gateway.git
+cd claude-desktop-local-model-gateway
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Multi
+```
+
+That installs the proxy into `%LOCALAPPDATA%\model-proxy`, registers a Task Scheduler job, and opens the same browser admin UI at <http://127.0.0.1:3099/admin>.
+
+1. Open <http://127.0.0.1:3099/admin>
+2. Click **+ Add Route** for each provider
+3. Paste API keys in the **API Keys** section
+4. Click **Save Changes**
+5. Fully quit Claude Desktop and reopen — the new models appear in the picker
+
+Re‑running `setup.ps1` is safe: existing `routes.json` and `secrets.json` are preserved so your `/admin` edits survive reinstall.
+
 ### Single‑provider mode (legacy, simpler)
+
+#### macOS
 
 ```bash
 DEEPSEEK_API_KEY=sk-xxx bash setup.sh                          # DeepSeek
@@ -45,12 +67,20 @@ PROVIDER=mimo            UPSTREAM_API_KEY=sk-xxx bash setup.sh # MiMo
 PROVIDER=custom-responses UPSTREAM_API_KEY=sk-xxx bash setup.sh # GPT via msutools.cn
 ```
 
+#### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Provider deepseek -ApiKey sk-xxx
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Provider mimo -ApiKey sk-xxx
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Provider custom-responses -ApiKey sk-xxx
+```
+
 The picker shows the three standard Claude names (`claude-haiku-4-5`, etc.) and
 they all forward to the configured upstream.
 
 ### After install — Claude Desktop side
 
-1. **Fully quit** Claude Desktop (`⌘Q`), then reopen.
+1. **Fully quit** Claude Desktop, then reopen.
 2. In **Settings → Identity & Models**, make sure the *Model list* is **empty** —
    that triggers `/v1/models` discovery from the gateway.
 3. The API Key field accepts any non‑empty string; the gateway ignores it.
@@ -103,11 +133,15 @@ The proxy also injects the real API key from `secrets.json` per route, so the
 
 | Path | Purpose | Permissions |
 |---|---|---|
-| `~/.local/model-proxy/proxy.js` | The proxy itself | 755 |
-| `~/.local/model-proxy/routes.json` | Aliases → upstream config (multi mode) | 644 |
-| `~/.local/model-proxy/secrets.json` | `secretId → apiKey` map | **600** (enforced) |
-| `~/Library/LaunchAgents/com.local.model-proxy.plist` | launchd unit | 644 |
-| `~/Library/Application Support/Claude/claude_desktop_config.json` | Claude Desktop gateway URL | 644 |
+| `~/.local/model-proxy/proxy.js` | The proxy itself on macOS | 755 |
+| `~/.local/model-proxy/routes.json` | Aliases → upstream config (multi mode on macOS) | 644 |
+| `~/.local/model-proxy/secrets.json` | `secretId → apiKey` map | **600** (enforced on macOS/Linux) |
+| `~/Library/LaunchAgents/com.local.model-proxy.plist` | launchd unit on macOS | 644 |
+| `~/Library/Application Support/Claude/claude_desktop_config.json` | Claude Desktop gateway URL on macOS | 644 |
+| `%LOCALAPPDATA%\model-proxy\proxy.js` | The proxy itself on Windows | inherits user ACL |
+| `%LOCALAPPDATA%\model-proxy\routes.json` | Aliases → upstream config (multi mode on Windows) | inherits user ACL |
+| `%LOCALAPPDATA%\model-proxy\secrets.json` | `secretId → apiKey` map | locked to the current user via ACL |
+| `%APPDATA%\Claude\claude_desktop_config.json` | Claude Desktop gateway URL on Windows | user profile file |
 
 `routes.json` example:
 
@@ -127,6 +161,8 @@ The proxy also injects the real API key from `secrets.json` per route, so the
 
 ## Common operations
 
+### macOS
+
 ```bash
 # Show health + routes
 curl http://127.0.0.1:3099/health | python3 -m json.tool
@@ -144,6 +180,27 @@ launchctl load   ~/Library/LaunchAgents/com.local.model-proxy.plist
 
 # Uninstall everything
 bash uninstall.sh
+```
+
+### Windows
+
+```powershell
+# Show health + routes
+Invoke-WebRequest http://127.0.0.1:3099/health -UseBasicParsing | Select-Object -Expand Content
+
+# Show what Claude Desktop sees
+Invoke-WebRequest http://127.0.0.1:3099/v1/models -UseBasicParsing | Select-Object -Expand Content
+
+# Tail traffic / errors
+Get-Content -Wait $env:LOCALAPPDATA\model-proxy\proxy.log
+Get-Content -Wait $env:LOCALAPPDATA\model-proxy\proxy.err
+
+# Edit routes/secrets, then restart
+Stop-ScheduledTask -TaskName ClaudeModelProxy
+Start-ScheduledTask -TaskName ClaudeModelProxy
+
+# Uninstall everything
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
 ## Troubleshooting
