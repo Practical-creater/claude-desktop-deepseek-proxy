@@ -249,9 +249,8 @@ $envBlock
 Set-Location -Path $(Quote-PSSingle $ProxyDir)
 
 # 把 stdout / stderr 分别追加到 proxy.log / proxy.err（对齐 launchd 行为）
-& $(Quote-PSSingle $NodeBin) $(Quote-PSSingle $ProxyJsTarget) `
-    1>> $(Quote-PSSingle $LogPath) `
-    2>> $(Quote-PSSingle $ErrPath)
+# 注意：写成单行避免反引号换行被 here-string 吃掉
+& $(Quote-PSSingle $NodeBin) $(Quote-PSSingle $ProxyJsTarget) 1>> $(Quote-PSSingle $LogPath) 2>> $(Quote-PSSingle $ErrPath)
 "@
 
 [System.IO.File]::WriteAllText($RunScriptPath, $runScript, (New-Object System.Text.UTF8Encoding($false)))
